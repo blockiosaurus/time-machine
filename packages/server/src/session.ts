@@ -1,6 +1,14 @@
 import { WebSocket } from 'ws';
 import { randomUUID } from 'crypto';
-import type { ServerMessage } from '@metaplex-agent/shared';
+import type {
+  ServerMessage,
+  TimeMachineCharacterContext,
+} from '@metaplex-agent/shared';
+
+// Avoid importing Agent's full generic type; pnpm hoists multiple copies of
+// @mastra/core which makes deep generics non-equal. We treat the per-session
+// agent as opaque and let the WS server narrow it where needed.
+type AgentLike = { stream: (...args: never[]) => unknown };
 
 /**
  * Per-WebSocket-connection state.
@@ -41,6 +49,16 @@ export class Session {
   // Identity & auth
   walletAddress: string | null = null;
   isOwnerVerified = false;
+
+  // Time Machine: per-session character + agent (set when serving /chat/:slug)
+  character: TimeMachineCharacterContext | null = null;
+  characterAgent: AgentLike | null = null;
+  /** Time Machine: DB session id used for message persistence + rate limits. */
+  chatSessionId: string | null = null;
+  /** Time Machine: hashed IP for rate limiting. */
+  ipHash: string | null = null;
+  /** Time Machine: in-flight character load (null if no slug supplied). */
+  characterLoadPromise: Promise<void> | null = null;
 
   // Conversation
   conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [];

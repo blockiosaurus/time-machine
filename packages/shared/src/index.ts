@@ -1,5 +1,7 @@
 export * from './types/protocol.js';
 export * from './types/agent.js';
+export * from './types/character.js';
+export * from './time-machine/index.js';
 export * from './config.js';
 export * from './server-limits.js';
 export * from './error-codes.js';

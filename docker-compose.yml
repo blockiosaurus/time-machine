@@ -1,0 +1,26 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: time-machine-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: timemachine
+      POSTGRES_PASSWORD: timemachine
+      POSTGRES_DB: timemachine
+    ports:
+      # Map to host 5433 to avoid colliding with a system-wide Postgres on
+      # 5432. The connection string in .env.example matches.
+      - '5433:5432'
+    volumes:
+      - timemachine_pgdata:/var/lib/postgresql/data
+      # Mounted as init script — runs ONCE on first container boot when the
+      # data volume is empty. To re-apply, use `pnpm db:reset`.
+      - ./packages/server/src/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U timemachine -d timemachine']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  timemachine_pgdata:

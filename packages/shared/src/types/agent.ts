@@ -37,4 +37,20 @@ export interface AgentContext {
   agentFeeSol: number;
   tokenOverride: string | null;
   ownerWallet: string | null;
+  /** Time Machine: per-session character context. Set when serving /chat/:slug. */
+  character?: TimeMachineCharacterContext | null;
+}
+
+/**
+ * Subset of CharacterRow that tools running inside a Time Machine chat
+ * session need. Kept small so we don't accidentally leak the full system
+ * prompt or DB internals through a tool result.
+ */
+export interface TimeMachineCharacterContext {
+  id: string;
+  slug: string;
+  canonicalName: string;
+  genesisTokenMint: string;
+  genesisTicker: string;
+  ownerWallet: string;
 }

@@ -3,8 +3,8 @@ import { Providers } from './providers';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Agent',
-  description: 'Chat with a Metaplex-powered Solana agent',
+  title: 'Time Machine',
+  description: 'Chat with NFT-backed AI personas of historical figures.',
 };
 
 export default function RootLayout({

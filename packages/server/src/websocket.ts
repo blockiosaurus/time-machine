@@ -1,5 +1,6 @@
 import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import { createServer, type IncomingMessage, type Server as HttpServer } from 'http';
+import { routeHttp } from './routes/router.js';
 import { timingSafeEqual, randomUUID } from 'crypto';
 import {
   getConfig,
@@ -11,9 +12,19 @@ import {
   type AgentContext,
   type ClientMessage,
 } from '@metaplex-agent/shared';
-import { createAgent, publicToolNames, autonomousToolNames } from '@metaplex-agent/core';
+import {
+  createAgent,
+  createHistoricalFigureAgent,
+  publicToolNames,
+  autonomousToolNames,
+  timeMachineChatToolNames,
+} from '@metaplex-agent/core';
 import { RequestContext } from '@mastra/core/request-context';
 import { Session, type SimpleRateLimiter } from './session.js';
+import { getDb } from './db/index.js';
+import { characters as charactersTable, chatSessions, messages as messagesTable } from './db/schema.js';
+import { eq } from 'drizzle-orm';
+import { hashIp, checkRateLimit } from './services/rate-limit.js';
 
 // Split regexes for different base58 contexts
 const BASE58_ADDRESS_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
@@ -141,7 +152,26 @@ export class PlexChatServer {
       process.exit(1);
     }
 
-    this.httpServer = createServer();
+    // Time Machine: serve HTTP routes (mint, characters, health) on the same
+    // port as the WebSocket. WebSocket upgrades go through the upgrade event;
+    // non-upgrade requests are routed by routeHttp.
+    this.httpServer = createServer(async (req, res) => {
+      try {
+        const handled = await routeHttp(req, res);
+        if (!handled) {
+          res.statusCode = 404;
+          res.setHeader('Content-Type', 'text/plain');
+          res.end('Not found');
+        }
+      } catch (err) {
+        if (!res.headersSent) {
+          res.statusCode = 500;
+          res.setHeader('Content-Type', 'text/plain');
+          res.end('Internal error');
+        }
+        console.error('HTTP handler error:', err);
+      }
+    });
 
     this.wss = new WebSocketServer({
       server: this.httpServer,
@@ -315,6 +345,29 @@ export class PlexChatServer {
       isAlive = false;
     }, 60000);
 
+    // --- Time Machine: parse slug from URL and lazily load the character ---
+    const tmSlug = this.extractTimeMachineSlug(req);
+    if (tmSlug) {
+      session.characterLoadPromise = this.loadTimeMachineCharacter(
+        session,
+        tmSlug,
+        req,
+      );
+      session.characterLoadPromise.catch((err) => {
+        console.error(`Failed to load character "${tmSlug}":`, err);
+        session.send({
+          type: 'error',
+          error: `Could not load character "${tmSlug}".`,
+          code: 'CHARACTER_LOAD_FAILED',
+        });
+        try {
+          ws.close(4040, 'Character not found or disabled');
+        } catch {
+          /* ignore */
+        }
+      });
+    }
+
     // --- Send connected message ---
     session.send({ type: 'connected', jid: `web:${session.id}` });
     this.emitContext(session);
@@ -323,6 +376,83 @@ export class PlexChatServer {
     ws.on('message', (data: RawData) => {
       this.handleMessage(session, data);
     });
+  }
+
+  /**
+   * Pull the Time Machine character slug from the request URL, looking at:
+   *   - the path: `/chat/<slug>`
+   *   - the query string: `?slug=<slug>` or `?character=<slug>`
+   * Returns null when no slug is present (in which case we fall back to the
+   * default Mastra agent — the original template behavior).
+   */
+  private extractTimeMachineSlug(req: IncomingMessage): string | null {
+    const url = req.url ?? '/';
+    // Path form: /chat/<slug> (with optional query)
+    const pathMatch = /^\/chat\/([a-z0-9-]+)(?:[/?]|$)/.exec(url);
+    if (pathMatch) return pathMatch[1] ?? null;
+    // Query form
+    const qIdx = url.indexOf('?');
+    if (qIdx === -1) return null;
+    const params = new URLSearchParams(url.slice(qIdx + 1));
+    const candidate = params.get('slug') ?? params.get('character');
+    if (!candidate) return null;
+    if (!/^[a-z0-9-]+$/.test(candidate)) return null;
+    return candidate;
+  }
+
+  /**
+   * Look up the character row by slug, build a per-session Mastra agent, and
+   * record a chat_sessions row for rate-limiting + message persistence.
+   * Throws if the character is missing or disabled — caller closes the WS.
+   */
+  private async loadTimeMachineCharacter(
+    session: Session,
+    slug: string,
+    req: IncomingMessage,
+  ): Promise<void> {
+    const config = getConfig();
+    const db = getDb(config.DATABASE_URL);
+    const rows = await db
+      .select()
+      .from(charactersTable)
+      .where(eq(charactersTable.slug, slug))
+      .limit(1);
+    const row = rows[0];
+    if (!row) throw new Error(`Character "${slug}" not found`);
+    if (row.status === 'disabled' || row.status === 'flagged') {
+      throw new Error(`Character "${slug}" is unavailable`);
+    }
+
+    session.character = {
+      id: row.id,
+      slug: row.slug,
+      canonicalName: row.canonicalName,
+      genesisTokenMint: row.genesisTokenMint,
+      genesisTicker: row.genesisTicker,
+      ownerWallet: row.ownerWallet,
+    };
+    // Construct full CharacterRow for the agent factory.
+    session.characterAgent = createHistoricalFigureAgent({
+      ...row,
+      status: row.status as 'active' | 'flagged' | 'disabled' | 'regenerating',
+    }) as unknown as { stream: (...args: never[]) => unknown };
+
+    // Hash the client IP for rate limit + privacy.
+    const remote =
+      (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim() ??
+      req.socket.remoteAddress ??
+      'unknown';
+    session.ipHash = hashIp(remote, config.IP_HASH_SALT);
+
+    // Open a chat_sessions row.
+    const chatRow = await db
+      .insert(chatSessions)
+      .values({
+        characterId: row.id,
+        ipHash: session.ipHash,
+      })
+      .returning({ id: chatSessions.id });
+    session.chatSessionId = chatRow[0]!.id;
   }
 
   /**
@@ -413,6 +543,16 @@ export class PlexChatServer {
    * Handle an incoming WebSocket message.
    */
   private async handleMessage(session: Session, data: RawData): Promise<void> {
+    // Time Machine: wait for character load to complete before processing.
+    if (session.characterLoadPromise) {
+      try {
+        await session.characterLoadPromise;
+      } catch {
+        // Connection will be closed by the loader's catch handler.
+        return;
+      }
+    }
+
     // Rate limiting
     if (!session.rateLimiter.allow()) {
       this.logAuthFailure('rate_limit', { sessionId: session.id });
@@ -630,6 +770,29 @@ export class PlexChatServer {
       return;
     }
 
+    // Time Machine: per-IP-per-character rate limit + DB persistence.
+    if (session.character && session.ipHash && session.chatSessionId) {
+      const db = getDb(config.DATABASE_URL);
+      const verdict = await checkRateLimit(db, session.character.id, session.ipHash, {
+        perTenMin: config.CHAT_RATE_PER_IP_PER_10MIN,
+        perDay: config.CHAT_RATE_PER_IP_PER_DAY,
+      });
+      if (!verdict.allowed) {
+        const inCharacter = `Forgive me — there's much pressing on me at present. Let me catch my breath, then we'll resume.`;
+        session.send({ type: 'message', content: inCharacter, sender: session.character.canonicalName });
+        return;
+      }
+      try {
+        await db.insert(messagesTable).values({
+          sessionId: session.chatSessionId,
+          role: 'user',
+          content,
+        });
+      } catch (e) {
+        console.warn('Failed to persist user message:', (e as Error).message);
+      }
+    }
+
     session.isProcessing = true;
     session.currentAbortController = new AbortController();
     session.send({ type: 'typing', isTyping: true });
@@ -662,6 +825,7 @@ export class PlexChatServer {
         ['agentFeeSol', config.AGENT_FEE_SOL],
         ['tokenOverride', config.TOKEN_OVERRIDE ?? null],
         ['ownerWallet', this.ownerWallet],
+        ['character', session.character],
         ['abortSignal', session.currentAbortController.signal],
       ]);
 
@@ -693,7 +857,10 @@ export class PlexChatServer {
         session.currentAbortController?.abort();
       }, config.MAX_RPC_TIME_BUDGET_MS);
 
-      const stream = await this.agent.stream(session.conversationHistory, {
+      // Time Machine: if a character is loaded for this session, use the
+      // per-character agent. Otherwise fall back to the default agent.
+      const activeAgent = (session.characterAgent ?? this.agent) as ReturnType<typeof createAgent>;
+      const stream = await activeAgent.stream(session.conversationHistory, {
         requestContext: requestContext as any,
         maxSteps: config.MAX_STEPS,
         abortSignal: session.currentAbortController.signal,

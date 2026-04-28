@@ -171,6 +171,59 @@ const envSchema = z.object({
     (v) => v === undefined ? true : v === 'true' || v === '1',
     z.boolean().default(true),
   ),
+
+  // ---------------------------------------------------------------------------
+  // Time Machine product config
+  // ---------------------------------------------------------------------------
+
+  /** Postgres connection string. Required for Time Machine. */
+  DATABASE_URL: z.string().min(1, 'DATABASE_URL is required for Time Machine'),
+
+  /** OpenAI API key for image generation (gpt-image-1). */
+  OPENAI_IMAGE_API_KEY: optional(z.string().min(1)),
+
+  /**
+   * Public base URL of the Time Machine UI deployment. Used to build links
+   * to statically-hosted assets like the collection metadata + logo. The
+   * collection asset's on-chain URI points at `${PUBLIC_BASE_URL}/collection/metadata.json`.
+   */
+  PUBLIC_BASE_URL: z.string().url().default('http://localhost:3001'),
+
+  /** Comma-separated base58 wallet addresses authorized for /admin. */
+  ADMIN_WALLETS: z
+    .string()
+    .default('')
+    .transform((raw) =>
+      raw
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0),
+    )
+    .pipe(z.array(z.string().regex(BASE58_ADDRESS_RE))),
+
+  /** Mint fee in lamports (1 SOL = 1e9). Default 0.25 SOL. */
+  MINT_FEE_LAMPORTS: z.coerce.number().int().min(0).default(250_000_000),
+
+  /** Wallet that receives mint fees. */
+  MINT_FEE_RECIPIENT: optional(base58Address('MINT_FEE_RECIPIENT')),
+
+  /** "Time Machine" Core collection address (set after one-time creation). */
+  COLLECTION_ADDRESS: optional(base58Address('COLLECTION_ADDRESS')),
+
+  /** Cloudflare Turnstile secret key for bot protection on chat. */
+  TURNSTILE_SECRET_KEY: optional(z.string().min(1)),
+
+  /** Daily LLM spend cap in USD (circuit breaker). */
+  DAILY_LLM_SPEND_USD_CAP: z.coerce.number().min(0).default(100),
+
+  /** Per-IP-per-character rate limit: messages allowed per 10-min window. */
+  CHAT_RATE_PER_IP_PER_10MIN: z.coerce.number().int().min(1).default(30),
+
+  /** Per-IP-per-character rate limit: messages allowed per day. */
+  CHAT_RATE_PER_IP_PER_DAY: z.coerce.number().int().min(1).default(200),
+
+  /** Salt for hashing client IPs before persistence. Must be unique per deploy. */
+  IP_HASH_SALT: z.string().min(16, 'IP_HASH_SALT must be at least 16 characters'),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
