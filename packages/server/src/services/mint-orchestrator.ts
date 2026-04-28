@@ -195,23 +195,32 @@ export async function generateMintPreview(
   let verdict = await moderatePrompt(prompt.systemPrompt);
   let regenerated = false;
   if (!verdict.ok) {
+    console.warn(
+      `[mint] moderation flagged first attempt for ${figure.canonicalName}:`,
+      verdict.reasons,
+    );
     regenerated = true;
     prompt = await generateSystemPrompt(figure);
     verdict = await moderatePrompt(prompt.systemPrompt);
   }
   if (!verdict.ok) {
+    const reasons = verdict.reasons.join(',') || '(no reasons given)';
+    console.error(
+      `[mint] moderation flagged twice for ${figure.canonicalName}; reasons=${reasons}; ` +
+      `prompt preview: ${prompt.systemPrompt.slice(0, 300)}…`,
+    );
     await setStep(db, mintJobId, 'prompt_gen', 'failed', {
-      error: `moderation flagged twice: ${verdict.reasons.join(',')}`,
+      error: `moderation flagged twice: ${reasons}`,
     });
     await db
       .update(mintJobs)
       .set({
         status: 'failed',
-        error: `moderation flagged twice: ${verdict.reasons.join(',')}`,
+        error: `moderation flagged twice: ${reasons}`,
         updatedAt: new Date(),
       })
       .where(eq(mintJobs.id, mintJobId));
-    throw new Error('Generated prompt failed moderation twice');
+    throw new Error(`Generated prompt failed moderation twice (${reasons})`);
   }
   await setStep(db, mintJobId, 'prompt_gen', 'done');
 
