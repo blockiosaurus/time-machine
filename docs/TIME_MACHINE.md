@@ -61,19 +61,109 @@ point at.
    Napoleon, Tesla, Marie Curie, and Sun Tzu under the founder wallet
    (your `AGENT_KEYPAIR`).
 
-### Railway production
+### Railway deployment
 
-Railway provisions a Postgres instance and injects `DATABASE_URL` at
-runtime. The schema does not auto-apply in prod (no init-script mount), so
-run the migrate step on first deploy and after any schema change:
+The repo's `railway.json` is preconfigured for Time Machine. You'll create
+**three** Railway resources:
 
-```bash
-DATABASE_URL=<railway db url> pnpm db:migrate
+1. **Postgres add-on** — provides `DATABASE_URL`.
+2. **Server service** — Node app from `Dockerfile` (this repo).
+3. **UI service or Vercel project** — Next.js app from `packages/ui` (separate; the server image deliberately excludes the UI build).
+
+#### Step 1 — Create the project + Postgres
+
+From the dashboard:
+- **New Project → Deploy from GitHub repo → pick your fork.** Railway auto-detects `railway.json`.
+- In the same project, **+ New → Database → PostgreSQL.** Railway injects `DATABASE_URL` into your service automatically once they're in the same project.
+
+#### Step 2 — Set the environment variables
+
+Pin these on the **server** service. Railway's **Variables → Raw editor** accepts the dotenv block below — paste, then fill in the secrets.
+
+```dotenv
+# From the template
+AGENT_MODE=public
+AGENT_KEYPAIR=<base58 secret key OR JSON byte array>
+WEB_CHANNEL_TOKEN=<openssl rand -hex 24>
+WEB_CHANNEL_PORT=3002
+ANTHROPIC_API_KEY=sk-ant-...
+SOLANA_RPC_URL=https://mainnet.helius-rpc.com/?api-key=...
+WS_ALLOWED_ORIGINS=https://your-ui-domain.com
+
+# Time Machine
+DATABASE_URL=${{Postgres.DATABASE_URL}}        # Railway-style reference; see note
+OPENAI_IMAGE_API_KEY=sk-...
+ADMIN_WALLETS=DhYCi6pvfhJkPRpt5RjYwsE1hZw84iu6twbRt9B6dYLV
+MINT_FEE_LAMPORTS=250000000
+PUBLIC_BASE_URL=https://your-ui-domain.com
+IP_HASH_SALT=<openssl rand -hex 16>
+
+# Filled in after the bootstrap steps below
+COLLECTION_ADDRESS=
+MINT_FEE_RECIPIENT=                            # leave blank to default to agent PDA
 ```
 
-`pnpm db:migrate` is idempotent (the schema uses `CREATE ... IF NOT
-EXISTS`), so it's safe to run on every deploy. You can wire it into
-`railway.json` as a release command.
+`${{Postgres.DATABASE_URL}}` is Railway's reference syntax — it resolves
+the Postgres add-on's connection string automatically. If you didn't add
+the add-on, set `DATABASE_URL` directly to your hosted Postgres URL.
+
+#### Step 3 — First deploy
+
+Push to your default branch (or click **Deploy** in the dashboard). The
+`preDeployCommand: pnpm db:migrate` line in `railway.json` runs the schema
+migration before the server starts — idempotent, so it's safe on every
+deploy.
+
+#### Step 4 — Generate a public domain
+
+In **Server service → Settings → Networking → Public Networking**, click
+**Generate Domain** with target port **3002**. Railway hands you a
+`*.up.railway.app` URL. The WebSocket endpoint is `wss://<that-url>`.
+
+#### Step 5 — Deploy the UI
+
+Create a separate Vercel/Railway project for `packages/ui` with these env vars:
+
+```dotenv
+NEXT_PUBLIC_WS_HOST=<your server's railway.app host>
+NEXT_PUBLIC_WS_PORT=443
+NEXT_PUBLIC_WS_PROTOCOL=wss
+NEXT_PUBLIC_WS_TOKEN=<same WEB_CHANNEL_TOKEN as server>
+NEXT_PUBLIC_SOLANA_RPC_URL=<same SOLANA_RPC_URL>
+NEXT_PUBLIC_SOLANA_CLUSTER=mainnet-beta
+```
+
+Once the UI is live, **edit `packages/ui/public/collection/metadata.json`**
+and replace the `timemachine.metaplex.com` placeholders with your actual
+deployed domain, then push. The on-chain collection's URI points at
+`${PUBLIC_BASE_URL}/collection/metadata.json` and the JSON in turn
+references the SVG image — both must resolve from the same host.
+
+#### Step 6 — Bootstrap on prod
+
+Once both services are up:
+
+1. **Create the Core collection** — run from your local machine, but
+   pointing at the prod RPC and using a wallet you control:
+   ```bash
+   SOLANA_RPC_URL=<prod rpc> AGENT_KEYPAIR=<prod keypair> \
+     PUBLIC_BASE_URL=https://your-ui-domain.com \
+     pnpm tsx scripts/create-collection.ts
+   ```
+   Set the printed `COLLECTION_ADDRESS=...` on the Railway server service
+   and redeploy.
+
+2. **Seed starter characters** (optional):
+   ```bash
+   SERVER_URL=https://<your-server-railway-host> \
+     SOLANA_RPC_URL=<prod rpc> \
+     AGENT_KEYPAIR=<prod keypair> \
+     pnpm tsx scripts/seed-characters.ts
+   ```
+
+That's it. `pnpm db:migrate` runs every deploy automatically, so schema
+changes ship with code; everything else lives in env vars or static
+files.
 
 ## HTTP API surface
 

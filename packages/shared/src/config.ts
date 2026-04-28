@@ -1,6 +1,7 @@
 import { config } from 'dotenv';
 import { existsSync } from 'fs';
 import { resolve, dirname } from 'path';
+import { createHash } from 'crypto';
 import { z } from 'zod';
 import bs58 from 'bs58';
 import { getState } from './state.js';
@@ -222,11 +223,23 @@ const envSchema = z.object({
   /** Per-IP-per-character rate limit: messages allowed per day. */
   CHAT_RATE_PER_IP_PER_DAY: z.coerce.number().int().min(1).default(200),
 
-  /** Salt for hashing client IPs before persistence. Must be unique per deploy. */
-  IP_HASH_SALT: z.string().min(16, 'IP_HASH_SALT must be at least 16 characters'),
+  /**
+   * Salt for hashing client IPs before persistence. Optional — if unset,
+   * we derive it deterministically from WEB_CHANNEL_TOKEN at config-load
+   * time so each deploy gets a unique salt for free. Override only if you
+   * need to rotate the salt independently of the WS token.
+   */
+  IP_HASH_SALT: optional(z.string().min(16, 'IP_HASH_SALT must be at least 16 characters')),
 });
 
-export type EnvConfig = z.infer<typeof envSchema>;
+/**
+ * Resolved config. IP_HASH_SALT is `optional` in the schema so missing values
+ * don't fail validation, but `getConfig()` always populates it (deriving from
+ * WEB_CHANNEL_TOKEN as a fallback) — so consumers can rely on a string here.
+ */
+export type EnvConfig = Omit<z.infer<typeof envSchema>, 'IP_HASH_SALT'> & {
+  IP_HASH_SALT: string;
+};
 
 /**
  * Map an LLM_MODEL provider prefix (`provider/model`) to the env var
@@ -265,7 +278,18 @@ export function getConfig(): EnvConfig {
         `Invalid environment configuration:\n${errors.join('\n')}\n\nSee .env.example for required variables.`
       );
     }
-    _config = result.data;
+    // Time Machine: derive IP_HASH_SALT from WEB_CHANNEL_TOKEN if not set,
+    // so deploys don't need to provision a separate secret. Each deploy
+    // already has a unique WEB_CHANNEL_TOKEN, so this gives unique salts
+    // for free without compromising the privacy goal (preventing
+    // cross-deploy rainbow-table attacks on IP hashes).
+    const ipSalt =
+      result.data.IP_HASH_SALT ??
+      createHash('sha256')
+        .update('time-machine:ip-salt:')
+        .update(result.data.WEB_CHANNEL_TOKEN)
+        .digest('hex');
+    _config = { ...result.data, IP_HASH_SALT: ipSalt };
 
     // LLM provider key presence check
     validateLlmApiKey(_config);

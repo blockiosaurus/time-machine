@@ -1,5 +1,75 @@
 @import "tailwindcss";
 
+/* ----------------------------------------------------------------------
+   Time Machine theme tokens
+   Gold/amber palette + serif headlines that match the on-chain logo SVG.
+   ---------------------------------------------------------------------- */
+:root {
+  --tm-gold-50:  #fbf3e3;
+  --tm-gold-200: #f5d4a0;
+  --tm-gold-400: #d4a574;
+  --tm-gold-600: #a0764e;
+  --tm-gold-800: #5e4226;
+  --tm-ink-950:  #0a0d18;
+  --tm-ink-900:  #11151f;
+  --tm-ink-800:  #1a1f2e;
+  --tm-ink-700:  #2a3142;
+}
+
+@theme inline {
+  --color-tm-gold-50:  var(--tm-gold-50);
+  --color-tm-gold-200: var(--tm-gold-200);
+  --color-tm-gold-400: var(--tm-gold-400);
+  --color-tm-gold-600: var(--tm-gold-600);
+  --color-tm-gold-800: var(--tm-gold-800);
+  --color-tm-ink-950:  var(--tm-ink-950);
+  --color-tm-ink-900:  var(--tm-ink-900);
+  --color-tm-ink-800:  var(--tm-ink-800);
+  --color-tm-ink-700:  var(--tm-ink-700);
+
+  --font-serif: Georgia, "Times New Roman", "Iowan Old Style", serif;
+}
+
+body {
+  background:
+    radial-gradient(ellipse at top, rgba(212, 165, 116, 0.06), transparent 55%),
+    radial-gradient(ellipse at bottom, rgba(26, 31, 46, 0.6), transparent 60%),
+    var(--tm-ink-950);
+  color: #f5f5f5;
+  min-height: 100vh;
+}
+
+.tm-headline {
+  font-family: var(--font-serif);
+  letter-spacing: 0.01em;
+}
+
+.tm-link-gold {
+  color: var(--tm-gold-200);
+  transition: color 0.15s ease;
+}
+.tm-link-gold:hover { color: var(--tm-gold-50); }
+
+.tm-button-primary {
+  background: linear-gradient(180deg, var(--tm-gold-200) 0%, var(--tm-gold-400) 100%);
+  color: var(--tm-ink-950);
+  border: 1px solid var(--tm-gold-600);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: filter 0.15s ease, transform 0.05s ease;
+}
+.tm-button-primary:hover { filter: brightness(1.08); }
+.tm-button-primary:active { transform: translateY(1px); }
+.tm-button-primary:disabled { opacity: 0.5; filter: grayscale(0.4); }
+
+.tm-card {
+  background: linear-gradient(180deg, rgba(26, 31, 46, 0.7), rgba(17, 21, 31, 0.7));
+  border: 1px solid rgba(212, 165, 116, 0.18);
+  backdrop-filter: blur(2px);
+}
+.tm-card:hover { border-color: rgba(212, 165, 116, 0.45); }
+
+
 /* Markdown content styles for agent messages */
 .markdown-content h1,
 .markdown-content h2,

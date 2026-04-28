@@ -1,8 +1,6 @@
 import { Agent } from '@mastra/core/agent';
-import type { CharacterRow } from '@metaplex-agent/shared';
+import { getConfig, type CharacterRow } from '@metaplex-agent/shared';
 import { timeMachineChatTools } from '../tools/time-machine/index.js';
-
-const CHAT_MODEL_ID = 'anthropic/claude-sonnet-4-6';
 
 /**
  * Build a Mastra agent for a single historical-figure character.
@@ -12,13 +10,15 @@ const CHAT_MODEL_ID = 'anthropic/claude-sonnet-4-6';
  *   Solana transfer/swap tools are intentionally NOT included; characters
  *   should not be moving the user's funds around.
  * - Each WebSocket session creates one of these. They are cheap to construct.
+ * - Uses the same `LLM_MODEL` as the template's default agent.
  */
 export function createHistoricalFigureAgent(character: CharacterRow): Agent {
+  const config = getConfig();
   return new Agent({
     id: `time-machine-${character.slug}`,
     name: character.canonicalName,
     instructions: character.systemPrompt,
-    model: CHAT_MODEL_ID,
+    model: config.LLM_MODEL,
     tools: timeMachineChatTools as unknown as Record<string, never>,
   });
 }

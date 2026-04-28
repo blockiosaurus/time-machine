@@ -45,6 +45,10 @@ RUN pnpm --filter @metaplex-agent/shared \
          --filter @metaplex-agent/server \
          build
 
+# Time Machine: copy the schema + migrate script + scripts dir so Railway's
+# preDeployCommand (`pnpm db:migrate`) can run inside the runtime container.
+COPY scripts ./scripts
+
 # -----------------------------------------------------------------------------
 # Runtime stage
 # -----------------------------------------------------------------------------
