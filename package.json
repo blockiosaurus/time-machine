@@ -14,7 +14,7 @@
     "db:up": "docker compose up -d postgres && docker compose exec -T postgres sh -c 'until pg_isready -U timemachine -d timemachine -q; do sleep 0.5; done'",
     "db:down": "docker compose down",
     "db:reset": "docker compose down -v && pnpm db:up",
-    "db:migrate": "tsx scripts/db-migrate.ts",
+    "db:migrate": "node scripts/db-migrate.mjs",
     "db:logs": "docker compose logs -f postgres"
   },
   "engines": {
