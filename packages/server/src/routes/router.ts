@@ -94,6 +94,7 @@ export async function routeHttp(
     return true;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    console.error(`[http] ${method} ${url} failed:`, e);
     sendError(res, 500, 'INTERNAL', msg);
     return true;
   }

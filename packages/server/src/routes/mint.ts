@@ -55,6 +55,7 @@ export async function handleMintCanonicalize(
       suggestedSlug: out.result.suggestedSlug,
     });
   } catch (e) {
+    console.error('[mint/canonicalize] failed:', e);
     sendError(res, 500, 'CANONICALIZE_ERROR', (e as Error).message);
   }
 }
@@ -102,7 +103,14 @@ export async function handleMintPreview(
   // For preview we need the full CanonicalizerResult; call canonicalize again.
   // This is wasteful — TODO: persist the canonicalizer result on the job row.
   const { canonicalize } = await import('../services/canonicalizer.js');
-  const re = await canonicalize(canonical);
+  let re;
+  try {
+    re = await canonicalize(canonical);
+  } catch (e) {
+    console.error('[mint/preview] canonicalize replay threw:', e);
+    sendError(res, 500, 'CANONICALIZE_REPLAY_FAILED', (e as Error).message);
+    return;
+  }
   if (!re.ok) {
     sendError(
       res,
@@ -143,6 +151,7 @@ export async function handleMintPreview(
       collection: config.COLLECTION_ADDRESS ?? null,
     });
   } catch (e) {
+    console.error('[mint/preview] failed:', e);
     sendError(res, 500, 'PREVIEW_FAILED', (e as Error).message);
   }
 }
@@ -173,6 +182,7 @@ export async function handleMintFinalize(
     const out = await finalizeMint(db, parsed.data);
     sendJson(res, 200, { ok: true, ...out });
   } catch (e) {
+    console.error('[mint/finalize] failed:', e);
     sendError(res, 500, 'FINALIZE_FAILED', (e as Error).message);
   }
 }
@@ -193,6 +203,7 @@ export async function handleMintConfirm(
     const out = await confirmMint(db, parsed.data);
     sendJson(res, 200, { ok: true, character: out });
   } catch (e) {
+    console.error('[mint/confirm] failed:', e);
     sendError(res, 500, 'CONFIRM_FAILED', (e as Error).message);
   }
 }
