@@ -63,7 +63,6 @@ export interface PreviewResponse {
 
 export interface FinalizeResponse {
   ok: boolean;
-  serverSignature: string;
   assetAddress: string;
   genesisTokenMint: string;
   genesisAccount: string;

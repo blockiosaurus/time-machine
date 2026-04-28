@@ -5,7 +5,6 @@ import {
   publicKey as toPublicKey,
   sol,
   transactionBuilder,
-  type Umi,
   type Transaction,
   createNoopSigner,
 } from '@metaplex-foundation/umi';
@@ -30,15 +29,16 @@ export interface FinalizeArgs {
 }
 
 export interface FinalizeResult {
-  /** Server-side tx (createCoreAsset + registerIdentityV1) — already on-chain. */
-  serverSignature: string;
-  /** Address of the newly minted character asset. */
+  /** Address of the asset that will be minted by the user's first tx. */
   assetAddress: string;
   /** Address of the Genesis token mint. */
   genesisTokenMint: string;
   /** Genesis launch account PDA. */
   genesisAccount: string;
-  /** Transactions for the user to sign + submit, in order. */
+  /**
+   * Transactions for the user to sign + submit, in order. Order matters:
+   * fee → create-and-register → genesis launches.
+   */
   userTransactions: Array<{ id: string; base64: string }>;
 }
 
@@ -78,9 +78,16 @@ function readPreviewState(jobRow: typeof mintJobs.$inferSelect): PreviewState {
 }
 
 /**
- * Build & submit the server-side asset+register tx, then build the user-side
- * fee + Genesis launch txs and return them base64-encoded for the client to
- * sign sequentially via their wallet adapter.
+ * Build the four (or more) transactions the user signs to mint a character.
+ * Server pre-signs the asset + authority slots; everything else lands on the
+ * minter's wallet so the platform pays nothing for asset rent.
+ *
+ * Order:
+ *   1. fee                   — 0.25 SOL → MINT_FEE_RECIPIENT (or agent PDA)
+ *   2. create-and-register   — createV2 + registerIdentityV1, user is payer
+ *                              + asset owner; server pre-signs as
+ *                              assetSigner + asset authority
+ *   3..N. genesis-launches   — bonding-curve setup, user is `wallet`
  */
 export async function finalizeMint(
   db: Db,
@@ -105,69 +112,53 @@ export async function finalizeMint(
   }
   const preview = readPreviewState(job);
 
-  // 1. Server-side: build asset + register identity, server is payer + authority.
   const umi = createUmi();
   const assetSigner = generateSigner(umi);
+  const userSigner = createNoopSigner(toPublicKey(args.ownerWallet));
 
-  // Default the mint fee recipient to the agent's PDA wallet (derived from
-  // AGENT_ASSET_ADDRESS) so fees accumulate in the agent's controlled
-  // account. Fallback to the agent keypair pubkey if the agent isn't yet
-  // registered. An explicit MINT_FEE_RECIPIENT env var still wins.
+  // Mint fee recipient: env override > agent PDA > raw agent keypair.
   const mintFeeRecipient =
     config.MINT_FEE_RECIPIENT ??
     (config.AGENT_ASSET_ADDRESS
       ? getAgentPda(umi, toPublicKey(config.AGENT_ASSET_ADDRESS)).toString()
       : umi.identity.publicKey.toString());
 
+  // (1) Fee transfer — user pays, user signs.
+  const feeBuilder = transferSol(umi, {
+    source: userSigner,
+    destination: toPublicKey(mintFeeRecipient),
+    amount: sol(config.MINT_FEE_LAMPORTS / 1_000_000_000),
+  });
+  const feeTx = await feeBuilder.setFeePayer(userSigner).buildAndSign(umi);
+  const feeBase64 = base64.deserialize(umi.transactions.serialize(feeTx))[0]!;
+
+  // (2) Create + register, user pays. Server pre-signs as assetSigner +
+  // asset authority. The user's wallet (Phantom etc.) fills in the payer
+  // signature when it signs the partially-signed tx we return.
   const { builder: createAssetBuilder } = buildCreateCharacterAssetTx(umi, {
     collection: config.COLLECTION_ADDRESS,
     name: preview.canonicalName,
     metadataUri: preview.characterMetadataUri,
     owner: args.ownerWallet,
     assetSigner,
+    payer: userSigner,
+    authority: umi.identity, // server keypair retains update authority
   });
   const registerBuilder = buildRegisterIdentityTx(umi, {
     asset: assetSigner.publicKey,
     collection: config.COLLECTION_ADDRESS,
     agentRegistrationUri: `https://gateway.irys.xyz/${preview.registrationCid}`,
+    payer: userSigner,
+    authority: umi.identity, // server keypair (must match asset's update authority)
   });
-
   const combined = transactionBuilder()
     .add(createAssetBuilder)
     .add(registerBuilder);
+  const combinedTx = await combined.setFeePayer(userSigner).buildAndSign(umi);
+  const combinedBase64 = base64.deserialize(umi.transactions.serialize(combinedTx))[0]!;
 
-  // Submit server-side tx and confirm. Persist intermediate state before
-  // calling Genesis so a Genesis-build failure doesn't lose the asset.
-  const serverConfirm = await combined.sendAndConfirm(umi);
-  const serverSignature = bs58.encode(serverConfirm.signature);
-
-  await db
-    .update(mintJobs)
-    .set({
-      steps: {
-        ...(job.steps as Record<string, unknown>),
-        nft_mint: { status: 'done', completedAt: new Date().toISOString() },
-        registry: { status: 'done', completedAt: new Date().toISOString() },
-        nft_mint_address: assetSigner.publicKey.toString(),
-        server_tx_signature: serverSignature,
-      },
-      updatedAt: new Date(),
-    })
-    .where(eq(mintJobs.id, args.mintJobId));
-
-  // 2. User-side: fee transfer + Genesis launch.
-  const userSigner = createNoopSigner(toPublicKey(args.ownerWallet));
-  const feeBuilder = transferSol(umi, {
-    source: userSigner,
-    destination: toPublicKey(mintFeeRecipient),
-    amount: sol(config.MINT_FEE_LAMPORTS / 1_000_000_000),
-  });
-
-  // Build the fee tx; user will sign as fee payer.
-  const feeTx = await feeBuilder.setFeePayer(userSigner).buildAndSign(umi);
-  const feeBase64 = base64.deserialize(umi.transactions.serialize(feeTx))[0]!;
-
-  // 3. Genesis launch — must run after the asset is on-chain (above sendAndConfirm).
+  // (3..N) Genesis launch. createLaunch builds unsigned txs that reference
+  // the future asset pubkey; the user signs each as `wallet` and submits.
   const genesisResult = await buildLaunchTransactions(umi, {
     ownerWallet: args.ownerWallet,
     characterAssetMint: assetSigner.publicKey,
@@ -176,42 +167,40 @@ export async function finalizeMint(
     imageUri: `https://gateway.irys.xyz/${preview.portraitCid}`,
     description: preview.bioSummary,
   });
-
   const genesisTxs: Array<{ id: string; base64: string }> = genesisResult.transactions.map(
     (tx: Transaction, i: number) => {
       const serialized = umi.transactions.serialize(tx);
-      return {
-        id: `genesis-${i}`,
-        base64: base64.deserialize(serialized)[0]!,
-      };
+      return { id: `genesis-${i}`, base64: base64.deserialize(serialized)[0]! };
     },
   );
 
+  // Persist intermediate state so /confirm can stitch everything together
+  // even if the client retries or fails mid-flight.
   await db
     .update(mintJobs)
     .set({
       steps: {
         ...(job.steps as Record<string, unknown>),
+        nft_mint_address: assetSigner.publicKey.toString(),
         genesis: {
           status: 'pending_user_sigs',
           mintAddress: genesisResult.mintAddress,
           genesisAccount: genesisResult.genesisAccount,
         },
-        nft_mint: { status: 'done', completedAt: new Date().toISOString() },
-        registry: { status: 'done', completedAt: new Date().toISOString() },
-        nft_mint_address: assetSigner.publicKey.toString(),
-        server_tx_signature: serverSignature,
       },
       updatedAt: new Date(),
     })
     .where(eq(mintJobs.id, args.mintJobId));
 
   return {
-    serverSignature,
     assetAddress: assetSigner.publicKey.toString(),
     genesisTokenMint: genesisResult.mintAddress,
     genesisAccount: genesisResult.genesisAccount,
-    userTransactions: [{ id: 'fee', base64: feeBase64 }, ...genesisTxs],
+    userTransactions: [
+      { id: 'fee', base64: feeBase64 },
+      { id: 'create-and-register', base64: combinedBase64 },
+      ...genesisTxs,
+    ],
   };
 }
 

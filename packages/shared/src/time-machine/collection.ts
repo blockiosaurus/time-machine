@@ -54,6 +54,10 @@ export interface CreateCharacterAssetArgs {
   owner: PublicKey | string;
   /** Optional custom asset signer; defaults to a fresh generateSigner(). */
   assetSigner?: Signer;
+  /** Wallet that pays for asset rent. Defaults to umi.identity. */
+  payer?: Signer;
+  /** Update authority on the asset. Defaults to umi.identity. */
+  authority?: Signer;
 }
 
 /**
@@ -61,6 +65,10 @@ export interface CreateCharacterAssetArgs {
  * the Time Machine collection. The returned `assetSigner` must sign the
  * transaction (so we surface it to callers who can attach it to their
  * tx-approval flow).
+ *
+ * `payer` and `authority` are explicit so the mint flow can route asset
+ * rent to the minter while keeping the asset's update authority on the
+ * server (which is what makes admin regeneration possible).
  */
 export function buildCreateCharacterAssetTx(
   umi: Umi,
@@ -73,6 +81,8 @@ export function buildCreateCharacterAssetTx(
     name: args.name,
     uri: args.metadataUri,
     owner: toPublicKey(args.owner),
+    payer: args.payer,
+    authority: args.authority,
   });
   return { builder, assetSigner };
 }

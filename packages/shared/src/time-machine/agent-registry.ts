@@ -64,8 +64,10 @@ export interface RegisterIdentityArgs {
   collection: PublicKey | string;
   /** The Irys URI of the registration document. */
   agentRegistrationUri: string;
-  /** Optional override for the asset authority signer. */
+  /** Asset authority. Defaults to payer; we pin to the server for moderation. */
   authority?: RegisterIdentityV1InstructionAccounts['authority'];
+  /** Wallet that pays for the registration PDA rent. Defaults to umi.identity. */
+  payer?: RegisterIdentityV1InstructionAccounts['payer'];
 }
 
 /**
@@ -82,5 +84,6 @@ export function buildRegisterIdentityTx(
     collection: toPublicKey(args.collection),
     agentRegistrationUri: args.agentRegistrationUri,
     authority: args.authority,
+    payer: args.payer,
   });
 }
