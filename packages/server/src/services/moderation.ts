@@ -1,4 +1,4 @@
-import { completeJson } from './anthropic.js';
+import { completeJson } from './llm.js';
 
 export type ModerationVerdict =
   | { ok: true }

@@ -1,5 +1,5 @@
 import type { CanonicalizerResponse } from '@metaplex-agent/shared';
-import { completeJson } from './anthropic.js';
+import { completeJson } from './llm.js';
 
 export const CANONICALIZER_RUBRIC = `
 You normalize user requests for historical-figure characters in the Time Machine product.

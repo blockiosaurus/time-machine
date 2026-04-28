@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { META_PROMPT, META_PROMPT_VERSION } from '@metaplex-agent/core';
 import type { CanonicalizerResult } from '@metaplex-agent/shared';
-import { complete } from './anthropic.js';
+import { complete } from './llm.js';
 
 export interface GeneratedPrompt {
   systemPrompt: string;
