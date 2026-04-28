@@ -103,9 +103,12 @@ export async function complete(
   if (system) messages.push({ role: 'system', content: system });
   messages.push({ role: 'user', content: userPrompt });
 
+  // Newer OpenAI models (gpt-5, o1, o3, etc.) reject `max_tokens` and
+  // require `max_completion_tokens`. The newer field is also accepted by
+  // current chat models, so always use it for forward compatibility.
   const resp = await openaiClient().chat.completions.create({
     model: modelId,
-    max_tokens: maxTokens,
+    max_completion_tokens: maxTokens,
     temperature,
     messages,
     ...(opts.jsonOnly ? { response_format: { type: 'json_object' as const } } : {}),
