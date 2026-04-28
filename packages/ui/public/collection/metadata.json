@@ -2,11 +2,11 @@
   "name": "Time Machine",
   "symbol": "TIME",
   "description": "Time Machine is a collection of AI agent personas of historical figures. Each NFT represents a single canonical figure (Albert Einstein, George Washington, Cleopatra…), is registered on the Metaplex Agent Registry, and pairs with a Genesis token whose creator fees flow to the NFT owner. Anyone can chat with any character at timemachine — chat is free; owners earn from token trading.",
-  "image": "https://timemachine.metaplex.com/collection/image.svg",
-  "external_url": "https://timemachine.metaplex.com",
+  "image": "https://time-machine-ui.vercel.app/collection/image.svg",
+  "external_url": "https://time-machine-ui.vercel.app",
   "properties": {
     "files": [
-      { "uri": "https://timemachine.metaplex.com/collection/image.svg", "type": "image/svg+xml" }
+      { "uri": "https://time-machine-ui.vercel.app/collection/image.svg", "type": "image/svg+xml" }
     ],
     "category": "image"
   },
