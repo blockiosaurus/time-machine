@@ -4,9 +4,11 @@ import {
   type CreateLaunchInput,
   type CreateLaunchResponse,
   type RegisterLaunchResponse,
+  type SvmNetwork,
   type TokenMetadata,
 } from '@metaplex-foundation/genesis';
 import { type Umi, type PublicKey } from '@metaplex-foundation/umi';
+import { getConfig } from '../config.js';
 
 export interface LaunchCharacterTokenArgs {
   /** Wallet that will sign the launch transactions (the NFT minter). */
@@ -43,10 +45,23 @@ export function buildTokenMetadata(args: LaunchCharacterTokenArgs): TokenMetadat
   };
 }
 
+/**
+ * Pick the Genesis API network from SOLANA_RPC_URL — devnet/testnet RPCs
+ * route to `solana-devnet`, everything else to `solana-mainnet`. Without
+ * this Genesis defaults to mainnet and its indexer never finds devnet
+ * assets, regardless of how many times we retry.
+ */
+function pickGenesisNetwork(): SvmNetwork {
+  const rpc = getConfig().SOLANA_RPC_URL.toLowerCase();
+  if (rpc.includes('devnet') || rpc.includes('testnet')) return 'solana-devnet';
+  return 'solana-mainnet';
+}
+
 export function buildCreateLaunchInput(args: LaunchCharacterTokenArgs): CreateLaunchInput {
   return {
     wallet: args.ownerWallet,
     token: buildTokenMetadata(args),
+    network: pickGenesisNetwork(),
     launchType: 'bondingCurve',
     launch: {
       // Disable mandatory first-buy — keeps mint UX clean.
