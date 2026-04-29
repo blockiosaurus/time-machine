@@ -68,6 +68,10 @@ export function buildCreateLaunchInput(args: LaunchCharacterTokenArgs): CreateLa
  * - We rely on Genesis protocol defaults for supply splits, virtual amounts,
  *   and fund flows.
  *
+ * Genesis runs its own indexer; even after the asset is confirmed on the
+ * user's RPC, Genesis's API may not see it for several seconds. We retry
+ * the "AssetV1 not found" path with exponential backoff before giving up.
+ *
  * Returns unsigned transactions for the user wallet to sign + submit. Call
  * `registerCharacterTokenLaunch` after on-chain confirmation to finish
  * registration.
@@ -76,7 +80,28 @@ export async function buildLaunchTransactions(
   umi: Umi,
   args: LaunchCharacterTokenArgs,
 ): Promise<CreateLaunchResponse> {
-  return await createLaunch(umi, {}, buildCreateLaunchInput(args));
+  const input = buildCreateLaunchInput(args);
+  const maxAttempts = 12;
+  const baseDelayMs = 1500;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await createLaunch(umi, {}, input);
+    } catch (e) {
+      const msg = (e as Error).message ?? '';
+      const isIndexerLag =
+        msg.includes('AssetV1') && msg.includes('was not found');
+      if (!isIndexerLag) throw e;
+      lastErr = e;
+      const delay = Math.min(baseDelayMs * 2 ** attempt, 8000);
+      console.warn(
+        `[genesis] indexer lag on attempt ${attempt + 1}/${maxAttempts}; ` +
+        `retrying in ${delay}ms (asset ${args.characterAssetMint})`,
+      );
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
 }
 
 export async function registerCharacterTokenLaunch(
