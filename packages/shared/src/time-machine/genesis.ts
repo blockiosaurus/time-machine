@@ -119,12 +119,52 @@ export async function buildLaunchTransactions(
   throw lastErr;
 }
 
+/**
+ * Acknowledge the on-chain launch with Genesis's backend so it appears in
+ * the Genesis UI, the indexer, and any Slack notifications they wire up.
+ * Same indexer-lag retry pattern as createLaunch.
+ */
 export async function registerCharacterTokenLaunch(
   umi: Umi,
   args: LaunchCharacterTokenArgs & { genesisAccount: string },
 ): Promise<RegisterLaunchResponse> {
-  return await registerLaunch(umi, {}, {
+  const input = {
     genesisAccount: args.genesisAccount,
     createLaunchInput: buildCreateLaunchInput(args),
-  });
+  };
+  const maxAttempts = 12;
+  const baseDelayMs = 1500;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const result = await registerLaunch(umi, {}, input);
+      console.log(
+        `[genesis] registered launch on attempt ${attempt + 1}: ` +
+        `genesisAccount=${args.genesisAccount} mint=${args.characterAssetMint} ` +
+        `existing=${result.existing ?? false}`,
+      );
+      return result;
+    } catch (e) {
+      const msg = (e as Error).message ?? '';
+      // Genesis API returns "AssetV1 was not found" or similar when its
+      // indexer hasn't caught up to the on-chain create txs yet.
+      const isIndexerLag =
+        msg.includes('was not found') ||
+        msg.includes('not yet indexed') ||
+        msg.includes('not found') ||
+        msg.includes('genesis account');
+      if (!isIndexerLag) {
+        console.error('[genesis] registerLaunch failed (non-retryable):', e);
+        throw e;
+      }
+      lastErr = e;
+      const delay = Math.min(baseDelayMs * 2 ** attempt, 8000);
+      console.warn(
+        `[genesis] registerLaunch indexer lag on attempt ${attempt + 1}/${maxAttempts}; ` +
+        `retrying in ${delay}ms (genesisAccount ${args.genesisAccount})`,
+      );
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
 }

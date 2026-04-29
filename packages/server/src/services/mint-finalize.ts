@@ -448,9 +448,17 @@ export async function confirmMint(
     };
   }
 
-  // Optional: register the launch with Genesis (acknowledgement). Non-fatal.
-  try {
-    if (genesisInfo.genesisAccount) {
+  // Register the launch with Genesis (drives the Genesis UI + Slack
+  // notification + indexer entry). Failures are logged + persisted so an
+  // admin can retry, but don't block the character row creation.
+  let registrationStatus: 'registered' | 'failed' | 'skipped' = 'skipped';
+  let registrationError: string | null = null;
+  if (genesisInfo.genesisAccount) {
+    try {
+      console.log(
+        `[mint/confirm] registering launch with Genesis: ` +
+        `genesisAccount=${genesisInfo.genesisAccount} mint=${assetAddr}`,
+      );
       await registerCharacterTokenLaunch(createUmi(), {
         genesisAccount: genesisInfo.genesisAccount,
         ownerWallet: job.wallet,
@@ -460,10 +468,33 @@ export async function confirmMint(
         imageUri: artefacts.portraitUri,
         description: preview.bioSummary,
       });
+      registrationStatus = 'registered';
+    } catch (e) {
+      registrationStatus = 'failed';
+      registrationError = (e as Error).message;
+      console.error(
+        '[mint/confirm] registerCharacterTokenLaunch failed after retries:',
+        e,
+      );
     }
-  } catch (e) {
-    console.warn('[mint/confirm] registerCharacterTokenLaunch failed (non-fatal):', (e as Error).message);
   }
+
+  // Persist the registration outcome on the mint_job so admins can audit
+  // / replay later.
+  await db
+    .update(mintJobs)
+    .set({
+      steps: {
+        ...steps,
+        genesis_register: {
+          status: registrationStatus,
+          error: registrationError,
+          completedAt: new Date().toISOString(),
+        },
+      },
+      updatedAt: new Date(),
+    })
+    .where(eq(mintJobs.id, args.mintJobId));
 
   const slug = slugify(preview.canonicalName);
   const normalizedName = preview.canonicalName
