@@ -61,15 +61,26 @@ CREATE TABLE IF NOT EXISTS mint_jobs (
   wallet         text NOT NULL,
   status         text NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending','canonicalizing','fuzzy_match_failed',
-                      'generating','awaiting_sig','on_chain','failed')),
+                      'generating','awaiting_fee','fee_paid',
+                      'awaiting_sig','on_chain','failed')),
   error          text,
   steps          jsonb NOT NULL DEFAULT '{}'::jsonb,
+  -- Preview artefacts held in DB until finalize uploads them to Irys.
+  -- Lets abandoned previews skip the Irys cost entirely.
+  portrait_bytes bytea,
+  prompt_text    text,
+  fee_signature  text,
   created_at     timestamptz NOT NULL DEFAULT now(),
   updated_at     timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_mint_jobs_wallet ON mint_jobs(wallet);
 CREATE INDEX IF NOT EXISTS idx_mint_jobs_status ON mint_jobs(status);
+
+-- Idempotent column adds for environments that ran an older schema.
+ALTER TABLE mint_jobs ADD COLUMN IF NOT EXISTS portrait_bytes bytea;
+ALTER TABLE mint_jobs ADD COLUMN IF NOT EXISTS prompt_text    text;
+ALTER TABLE mint_jobs ADD COLUMN IF NOT EXISTS fee_signature  text;
 
 CREATE TABLE IF NOT EXISTS moderation_tickets (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),

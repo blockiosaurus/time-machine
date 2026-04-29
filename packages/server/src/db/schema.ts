@@ -9,8 +9,13 @@ import {
   date,
   unique,
   index,
+  customType,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
+
+const bytea = customType<{ data: Buffer; default: false; notNull: false }>({
+  dataType: () => 'bytea',
+});
 
 export const characters = pgTable(
   'characters',
@@ -93,6 +98,9 @@ export const mintJobs = pgTable(
     status: text('status').notNull().default('pending'),
     error: text('error'),
     steps: jsonb('steps').notNull().default(sql`'{}'::jsonb`),
+    portraitBytes: bytea('portrait_bytes'),
+    promptText: text('prompt_text'),
+    feeSignature: text('fee_signature'),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),

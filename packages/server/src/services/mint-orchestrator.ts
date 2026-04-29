@@ -1,9 +1,5 @@
 import { eq } from 'drizzle-orm';
-import {
-  buildAgentRegistrationDoc,
-  buildCharacterMetadataDoc,
-  type CanonicalizerResult,
-} from '@metaplex-agent/shared';
+import type { CanonicalizerResult } from '@metaplex-agent/shared';
 import { META_PROMPT_VERSION } from '@metaplex-agent/core';
 import type { Db } from '../db/index.js';
 import { mintJobs } from '../db/schema.js';
@@ -12,26 +8,17 @@ import { fuzzyMatchCheck } from './fuzzy-match.js';
 import { generateSystemPrompt } from './prompt-generator.js';
 import { generatePortrait } from './image-generator.js';
 import { moderatePrompt } from './moderation.js';
-import { pinJson, pinBytes, type IrysUpload } from './irys.js';
 import { slugify } from './normalize.js';
 
 export interface PreviewArgs {
-  /** Mint job id from the canonicalize call. */
   mintJobId: string;
-  /** Confirmed canonical record (already in mint_jobs). */
   figure: CanonicalizerResult;
-  /** User-chosen ticker (validated against fuzzy match before this point). */
   ticker: string;
-  /** WebSocket chat endpoint to advertise in the EIP-8004 doc. */
   chatEndpoint: string;
 }
 
 export interface PreviewResult {
   slug: string;
-  promptIpfs: IrysUpload;
-  portraitIpfs: IrysUpload;
-  registrationIpfs: IrysUpload;
-  characterMetadataIpfs: IrysUpload;
   systemPrompt: string;
   promptFingerprint: string;
   metaPromptVersion: string;
@@ -45,7 +32,6 @@ async function setStep(
   status: 'running' | 'done' | 'failed',
   extra?: { error?: string },
 ) {
-  // Read-modify-write the steps jsonb. Simple here; could move to SQL jsonb_set.
   const rows = await db.select().from(mintJobs).where(eq(mintJobs.id, jobId)).limit(1);
   const row = rows[0];
   if (!row) throw new Error(`mint_job ${jobId} not found`);
@@ -171,18 +157,17 @@ export async function startMintCanonicalize(
 }
 
 /**
- * Step 2 of the mint flow. Generates prompt + image, runs moderation
- * (with one regeneration attempt on flag), pins everything to Irys, and
- * returns the CIDs the client needs to display the preview.
- *
- * Idempotent on the prompt+image+pin layer if called twice for the same job
- * — but this version does NOT cache (intentional: regenerate on retry).
+ * Step 2 of the mint flow. Generates prompt + image + runs moderation, but
+ * does NOT pin to Irys. Bytes + text are stored on the mint_jobs row. The
+ * UI fetches the portrait via `/api/mint-jobs/<id>/portrait` for preview
+ * display. Irys uploads are deferred to finalize so abandoned previews
+ * don't drain the agent wallet.
  */
 export async function generateMintPreview(
   db: Db,
   args: PreviewArgs,
 ): Promise<PreviewResult> {
-  const { mintJobId, figure, ticker, chatEndpoint } = args;
+  const { mintJobId, figure, ticker } = args;
 
   await db
     .update(mintJobs)
@@ -224,57 +209,29 @@ export async function generateMintPreview(
   }
   await setStep(db, mintJobId, 'prompt_gen', 'done');
 
-  // 2. Image gen + Irys pin in parallel with prompt+registration pin.
+  // 2. Image gen.
   await setStep(db, mintJobId, 'image_gen', 'running');
   const portraitGen = await generatePortrait(figure.canonicalName);
   await setStep(db, mintJobId, 'image_gen', 'done');
 
-  await setStep(db, mintJobId, 'irys_pin', 'running');
-  const [portraitIpfs, promptIpfs] = await Promise.all([
-    pinBytes(portraitGen.bytes, portraitGen.contentType),
-    pinJson({
-      systemPrompt: prompt.systemPrompt,
-      metaPromptVersion: prompt.metaPromptVersion,
-      fingerprint: prompt.fingerprint,
-      figure,
-    }),
-  ]);
-
   const slug = slugify(figure.canonicalName);
-  const registrationDoc = buildAgentRegistrationDoc({
-    canonicalName: figure.canonicalName,
-    bioSummary: figure.bioSummary,
-    portraitUri: portraitIpfs.uri,
-    chatEndpoint,
-  });
-  const registrationIpfs = await pinJson(registrationDoc);
 
-  const characterMetadataDoc = buildCharacterMetadataDoc({
-    canonicalName: figure.canonicalName,
-    slug,
-    bioSummary: figure.bioSummary,
-    portraitUri: portraitIpfs.uri,
-    promptCid: promptIpfs.cid,
-    portraitCid: portraitIpfs.cid,
-    registrationCid: registrationIpfs.cid,
-    metaPromptVersion: META_PROMPT_VERSION,
-    promptFingerprint: prompt.fingerprint,
-    birthYear: figure.birthYear,
-    deathYear: figure.deathYear,
-    ticker,
-  });
-  const characterMetadataIpfs = await pinJson(characterMetadataDoc);
-  await setStep(db, mintJobId, 'irys_pin', 'done');
-
-  // Persist the full preview state on the job so finalize can read it back
-  // without re-running any of the expensive steps.
+  // Persist preview state on the row. Bytes + prompt text live in dedicated
+  // columns so we can serve them efficiently; everything else goes into the
+  // steps blob.
   const existingSteps = (
-    (await db.select({ s: mintJobs.steps }).from(mintJobs).where(eq(mintJobs.id, mintJobId)).limit(1))[0]?.s ?? {}
+    (await db
+      .select({ s: mintJobs.steps })
+      .from(mintJobs)
+      .where(eq(mintJobs.id, mintJobId))
+      .limit(1))[0]?.s ?? {}
   ) as Record<string, unknown>;
   await db
     .update(mintJobs)
     .set({
-      status: 'awaiting_sig',
+      status: 'awaiting_fee',
+      portraitBytes: Buffer.from(portraitGen.bytes),
+      promptText: prompt.systemPrompt,
       steps: {
         ...existingSteps,
         preview: {
@@ -284,14 +241,11 @@ export async function generateMintPreview(
           deathYear: figure.deathYear,
           aliases: figure.aliases,
           ticker,
-          promptCid: promptIpfs.cid,
-          portraitCid: portraitIpfs.cid,
-          registrationCid: registrationIpfs.cid,
-          characterMetadataCid: characterMetadataIpfs.cid,
-          characterMetadataUri: characterMetadataIpfs.uri,
+          slug,
           systemPrompt: prompt.systemPrompt,
           promptFingerprint: prompt.fingerprint,
           metaPromptVersion: prompt.metaPromptVersion,
+          portraitContentType: portraitGen.contentType,
         },
       },
       updatedAt: new Date(),
@@ -300,10 +254,6 @@ export async function generateMintPreview(
 
   return {
     slug,
-    promptIpfs,
-    portraitIpfs,
-    registrationIpfs,
-    characterMetadataIpfs,
     systemPrompt: prompt.systemPrompt,
     promptFingerprint: prompt.fingerprint,
     metaPromptVersion: prompt.metaPromptVersion,

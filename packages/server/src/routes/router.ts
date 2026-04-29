@@ -5,7 +5,9 @@ import { sendError, sendJson } from './http-utils.js';
 import {
   handleMintCanonicalize,
   handleMintPreview,
-  handleMintFinalize,
+  handleMintBuildFeeTx,
+  handleMintBuildAssetTx,
+  handleMintBuildGenesisTxs,
   handleMintConfirm,
 } from './mint.js';
 import {
@@ -18,6 +20,7 @@ import {
   handleAdminSetStatus,
   handleAdminListTickets,
 } from './admin.js';
+import { handleMintJobPortrait } from './portrait.js';
 
 /**
  * Top-level HTTP router. Returns true if the request was handled, false
@@ -30,13 +33,11 @@ export async function routeHttp(
   const url = req.url ?? '/';
   const method = req.method ?? 'GET';
 
-  // CORS preflight
   if (method === 'OPTIONS' && url.startsWith('/api/')) {
     sendJson(res, 204, '');
     return true;
   }
 
-  // Health probes
   if (url === '/api/health') {
     sendJson(res, 200, { ok: true, ts: new Date().toISOString() });
     return true;
@@ -56,12 +57,25 @@ export async function routeHttp(
       await handleMintPreview(req, res, db);
       return true;
     }
-    if (method === 'POST' && url === '/api/mint/finalize') {
-      await handleMintFinalize(req, res, db);
+    if (method === 'POST' && url === '/api/mint/build-fee-tx') {
+      await handleMintBuildFeeTx(req, res, db);
+      return true;
+    }
+    if (method === 'POST' && url === '/api/mint/build-asset-tx') {
+      await handleMintBuildAssetTx(req, res, db);
+      return true;
+    }
+    if (method === 'POST' && url === '/api/mint/build-genesis-txs') {
+      await handleMintBuildGenesisTxs(req, res, db);
       return true;
     }
     if (method === 'POST' && url === '/api/mint/confirm') {
       await handleMintConfirm(req, res, db);
+      return true;
+    }
+    const portraitMatch = /^\/api\/mint-jobs\/([0-9a-f-]{36})\/portrait$/.exec(url);
+    if (method === 'GET' && portraitMatch) {
+      await handleMintJobPortrait(req, res, db, portraitMatch[1]!);
       return true;
     }
     if (method === 'GET' && url === '/api/characters') {

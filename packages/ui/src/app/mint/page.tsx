@@ -6,21 +6,38 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { Connection, VersionedTransaction } from '@solana/web3.js';
 import { TimeMachineHeader } from '@/components/tm-header';
-import { api } from '../api-client';
+import { api, type PreviewResponse } from '../api-client';
 
 type Step =
   | { kind: 'idle' }
   | { kind: 'canonicalizing' }
-  | { kind: 'canonicalized'; jobId: string; canonical: NonNullable<Awaited<ReturnType<typeof api.canonicalize>>['canonical']>; suggestedTicker: string }
+  | { kind: 'canonicalized'; jobId: string; canonical: NonNullable<Awaited<ReturnType<typeof api.canonicalize>>['canonical']> }
   | { kind: 'previewing' }
-  | { kind: 'preview-ready'; jobId: string; preview: Awaited<ReturnType<typeof api.preview>> }
-  | { kind: 'finalizing' }
+  | { kind: 'preview-ready'; jobId: string; preview: PreviewResponse }
+  | { kind: 'awaiting-fee' }
+  | { kind: 'pinning' }
+  | { kind: 'awaiting-asset' }
+  | { kind: 'building-genesis' }
+  | { kind: 'awaiting-genesis' }
   | { kind: 'confirming' }
   | { kind: 'success'; slug: string }
   | { kind: 'error'; message: string };
 
 function rpcUrl(): string {
   return process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? 'https://api.devnet.solana.com';
+}
+
+async function signAndSubmit(
+  conn: Connection,
+  wallet: ReturnType<typeof useWallet>,
+  base64Tx: string,
+): Promise<string> {
+  if (!wallet.signTransaction) throw new Error('Wallet does not support signTransaction');
+  const tx = VersionedTransaction.deserialize(Buffer.from(base64Tx, 'base64'));
+  const signed = await wallet.signTransaction(tx);
+  const sig = await conn.sendRawTransaction(signed.serialize(), { skipPreflight: false });
+  await conn.confirmTransaction(sig, 'confirmed');
+  return sig;
 }
 
 export default function MintPage() {
@@ -39,7 +56,7 @@ export default function MintPage() {
         return;
       }
       setTicker(r.canonical.suggestedTicker);
-      setStep({ kind: 'canonicalized', jobId: r.jobId, canonical: r.canonical, suggestedTicker: r.canonical.suggestedTicker });
+      setStep({ kind: 'canonicalized', jobId: r.jobId, canonical: r.canonical });
     } catch (e) {
       setStep({ kind: 'error', message: (e as Error).message });
     }
@@ -60,27 +77,42 @@ export default function MintPage() {
   };
 
   const finalize = async (jobId: string) => {
-    if (!wallet.publicKey || !wallet.signAllTransactions) return;
-    setStep({ kind: 'finalizing' });
+    if (!wallet.publicKey) return;
+    const conn = new Connection(rpcUrl(), 'confirmed');
+    const owner = wallet.publicKey.toBase58();
+
     try {
-      const fin = await api.finalize(jobId, wallet.publicKey.toBase58());
-      if (!fin.ok) {
-        setStep({ kind: 'error', message: 'Finalize failed.' });
-        return;
+      // 1. Build + sign fee tx.
+      setStep({ kind: 'awaiting-fee' });
+      const feeRes = await api.buildFeeTx(jobId, owner);
+      if (!feeRes.ok) throw new Error('Could not build fee transaction.');
+      const feeSig = await signAndSubmit(conn, wallet, feeRes.feeTx.base64);
+
+      // 2. Server pins to Irys + builds create+register tx.
+      setStep({ kind: 'pinning' });
+      const assetRes = await api.buildAssetTx(jobId, owner, feeSig);
+      if (!assetRes.ok) throw new Error('Could not build asset transaction.');
+
+      // 3. Sign + submit asset tx.
+      setStep({ kind: 'awaiting-asset' });
+      const assetSig = await signAndSubmit(conn, wallet, assetRes.assetTx.base64);
+
+      // 4. Server builds Genesis txs.
+      setStep({ kind: 'building-genesis' });
+      const genesisRes = await api.buildGenesisTxs(jobId, owner, assetSig);
+      if (!genesisRes.ok) throw new Error('Could not build Genesis transactions.');
+
+      // 5. Sign + submit Genesis txs.
+      setStep({ kind: 'awaiting-genesis' });
+      const genesisSigs: string[] = [];
+      for (const tx of genesisRes.genesisTxs) {
+        const sig = await signAndSubmit(conn, wallet, tx.base64);
+        genesisSigs.push(sig);
       }
-      const conn = new Connection(rpcUrl());
-      const txs = fin.userTransactions.map((t) =>
-        VersionedTransaction.deserialize(Buffer.from(t.base64, 'base64')),
-      );
-      const signed = await wallet.signAllTransactions(txs);
-      const sigs: string[] = [];
-      for (const tx of signed) {
-        const sig = await conn.sendRawTransaction(tx.serialize(), { skipPreflight: false });
-        await conn.confirmTransaction(sig, 'confirmed');
-        sigs.push(sig);
-      }
+
+      // 6. Confirm + persist.
       setStep({ kind: 'confirming' });
-      const conf = await api.confirm(jobId, sigs);
+      const conf = await api.confirm(jobId, owner, genesisSigs);
       if (conf.ok && conf.character?.slug) {
         setStep({ kind: 'success', slug: conf.character.slug });
       } else {
@@ -130,9 +162,7 @@ export default function MintPage() {
         {step.kind === 'canonicalized' && (
           <div className="mt-10 space-y-4">
             <Card>
-              <h3 className="tm-headline text-xl font-bold text-tm-gold-50">
-                {step.canonical.canonicalName}
-              </h3>
+              <h3 className="tm-headline text-xl font-bold text-tm-gold-50">{step.canonical.canonicalName}</h3>
               <p className="text-xs uppercase tracking-widest text-tm-gold-400/80">
                 {step.canonical.birthYear ?? '?'} – {step.canonical.deathYear ?? '?'}
               </p>
@@ -162,7 +192,11 @@ export default function MintPage() {
           <div className="mt-10 space-y-4">
             <Card>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={step.preview.portraitUri} alt="" className="aspect-square w-56 rounded-md object-cover" />
+              <img
+                src={`${api.base()}${step.preview.portraitUrl}`}
+                alt=""
+                className="aspect-square w-56 rounded-md object-cover"
+              />
               <p className="mt-3 text-xs uppercase tracking-widest text-tm-gold-400/80">
                 /{step.preview.slug} · Fee {step.preview.mintFeeLamports / 1_000_000_000} SOL
               </p>
@@ -170,11 +204,19 @@ export default function MintPage() {
             <button onClick={() => finalize(step.jobId)} className="tm-button-primary rounded-md px-5 py-2.5">
               Sign and mint
             </button>
+            <p className="text-xs text-zinc-500">
+              You'll be asked to sign 3–4 transactions: the mint fee, the asset + registry,
+              and the Genesis token launch.
+            </p>
           </div>
         )}
 
-        {step.kind === 'finalizing' && <Spinner label="Building transactions…" />}
-        {step.kind === 'confirming' && <Spinner label="Awaiting on-chain confirmation…" />}
+        {step.kind === 'awaiting-fee' && <Spinner label="Awaiting fee signature in your wallet…" />}
+        {step.kind === 'pinning' && <Spinner label="Pinning to Irys…" />}
+        {step.kind === 'awaiting-asset' && <Spinner label="Awaiting asset signature…" />}
+        {step.kind === 'building-genesis' && <Spinner label="Preparing Genesis launch…" />}
+        {step.kind === 'awaiting-genesis' && <Spinner label="Awaiting Genesis signatures…" />}
+        {step.kind === 'confirming' && <Spinner label="Confirming on-chain…" />}
 
         {step.kind === 'success' && (
           <div className="mt-10 rounded-md border border-tm-gold-400/40 bg-tm-gold-200/5 p-5">

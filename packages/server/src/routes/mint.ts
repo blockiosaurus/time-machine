@@ -12,6 +12,7 @@ import { readJsonBody, sendJson, sendError } from './http-utils.js';
 
 const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const TICKER_RE = /^[A-Z]{3,10}$/;
+const SIG_RE = /^[1-9A-HJ-NP-Za-km-z]{43,88}$/;
 
 const canonicalizeBody = z.object({
   rawName: z.string().min(1).max(200),
@@ -22,6 +23,35 @@ const previewBody = z.object({
   mintJobId: z.string().uuid(),
   ticker: z.string().regex(TICKER_RE),
 });
+
+const buildFeeBody = z.object({
+  mintJobId: z.string().uuid(),
+  ownerWallet: z.string().regex(BASE58_RE),
+});
+
+const buildAssetBody = z.object({
+  mintJobId: z.string().uuid(),
+  ownerWallet: z.string().regex(BASE58_RE),
+  feeSignature: z.string().regex(SIG_RE),
+});
+
+const buildGenesisBody = z.object({
+  mintJobId: z.string().uuid(),
+  ownerWallet: z.string().regex(BASE58_RE),
+  assetSignature: z.string().regex(SIG_RE),
+});
+
+const confirmBody = z.object({
+  mintJobId: z.string().uuid(),
+  ownerWallet: z.string().regex(BASE58_RE),
+  genesisSignatures: z.array(z.string().regex(SIG_RE)).min(1).max(20),
+});
+
+function chatEndpointFor(canonicalName: string): string {
+  const slug = canonicalName.toLowerCase().replace(/\s+/g, '-');
+  const base = process.env.PUBLIC_WS_BASE ?? 'wss://timemachine.example';
+  return `${base.replace(/\/$/, '')}/chat/${slug}`;
+}
 
 export async function handleMintCanonicalize(
   req: IncomingMessage,
@@ -74,7 +104,6 @@ export async function handleMintPreview(
   const { mintJobId, ticker } = parsed.data;
   const config = getConfig();
 
-  // Look up the canonical record from the mint job.
   const rows = await db.select().from(mintJobs).where(eq(mintJobs.id, mintJobId)).limit(1);
   const job = rows[0];
   if (!job) {
@@ -90,18 +119,14 @@ export async function handleMintPreview(
     );
     return;
   }
-  // The orchestrator stores canonicalizer output on first success in
-  // `canonical_name`; bio + birth/death are stored in the steps blob. For now
-  // we re-canonicalize on preview to keep the contract simple and avoid
-  // schema bloat. Future: persist full canonicalizer result on the row.
   const canonical = job.canonicalName;
   if (!canonical) {
     sendError(res, 409, 'JOB_BAD_STATE', 'Mint job missing canonical name.');
     return;
   }
 
-  // For preview we need the full CanonicalizerResult; call canonicalize again.
-  // This is wasteful — TODO: persist the canonicalizer result on the job row.
+  // We need the full CanonicalizerResult; cheap re-canonicalize.
+  // TODO: persist full canonicalizer result on the job row to skip this.
   const { canonicalize } = await import('../services/canonicalizer.js');
   let re;
   try {
@@ -112,42 +137,24 @@ export async function handleMintPreview(
     return;
   }
   if (!re.ok) {
-    sendError(
-      res,
-      500,
-      'CANONICALIZE_REPLAY_FAILED',
-      `Re-canonicalization rejected: ${re.message}`,
-    );
+    sendError(res, 500, 'CANONICALIZE_REPLAY_FAILED', `Re-canonicalization rejected: ${re.message}`);
     return;
   }
-
-  const chatEndpoint = `${
-    process.env.PUBLIC_WS_BASE ?? 'wss://timemachine.example'
-  }/chat/${re.canonicalName.toLowerCase().replace(/\s+/g, '-')}`;
 
   try {
     const preview = await generateMintPreview(db, {
       mintJobId,
       figure: re,
       ticker,
-      chatEndpoint,
+      chatEndpoint: chatEndpointFor(re.canonicalName),
     });
     sendJson(res, 200, {
       ok: true,
       mintJobId,
       slug: preview.slug,
-      portraitUri: preview.portraitIpfs.uri,
-      promptCid: preview.promptIpfs.cid,
-      portraitCid: preview.portraitIpfs.cid,
-      registrationCid: preview.registrationIpfs.cid,
-      characterMetadataCid: preview.characterMetadataIpfs.cid,
-      characterMetadataUri: preview.characterMetadataIpfs.uri,
+      portraitUrl: `/api/mint-jobs/${mintJobId}/portrait`,
       moderation: preview.moderation,
       mintFeeLamports: config.MINT_FEE_LAMPORTS,
-      // The actual recipient is resolved at finalize time and may default to
-      // the agent PDA when not explicitly set; surface the override (or null)
-      // here so the UI can display it for transparency.
-      mintFeeRecipient: config.MINT_FEE_RECIPIENT ?? null,
       collection: config.COLLECTION_ADDRESS ?? null,
     });
   } catch (e) {
@@ -156,34 +163,76 @@ export async function handleMintPreview(
   }
 }
 
-const finalizeBody = z.object({
-  mintJobId: z.string().uuid(),
-  ownerWallet: z.string().regex(BASE58_RE),
-});
-
-const confirmBody = z.object({
-  mintJobId: z.string().uuid(),
-  signatures: z.array(z.string().min(64)).min(1).max(20),
-});
-
-export async function handleMintFinalize(
+export async function handleMintBuildFeeTx(
   req: IncomingMessage,
   res: ServerResponse,
   db: Db,
 ): Promise<void> {
   const body = await readJsonBody(req);
-  const parsed = finalizeBody.safeParse(body);
+  const parsed = buildFeeBody.safeParse(body);
   if (!parsed.success) {
     sendError(res, 400, 'INVALID_BODY', parsed.error.message);
     return;
   }
-  const { finalizeMint } = await import('../services/mint-finalize.js');
+  const { buildFeeTx } = await import('../services/mint-finalize.js');
   try {
-    const out = await finalizeMint(db, parsed.data);
+    const out = await buildFeeTx(db, parsed.data);
     sendJson(res, 200, { ok: true, ...out });
   } catch (e) {
-    console.error('[mint/finalize] failed:', e);
-    sendError(res, 500, 'FINALIZE_FAILED', (e as Error).message);
+    console.error('[mint/build-fee-tx] failed:', e);
+    sendError(res, 500, 'BUILD_FEE_FAILED', (e as Error).message);
+  }
+}
+
+export async function handleMintBuildAssetTx(
+  req: IncomingMessage,
+  res: ServerResponse,
+  db: Db,
+): Promise<void> {
+  const body = await readJsonBody(req);
+  const parsed = buildAssetBody.safeParse(body);
+  if (!parsed.success) {
+    sendError(res, 400, 'INVALID_BODY', parsed.error.message);
+    return;
+  }
+  const { confirmFeeAndBuildAssetTx } = await import('../services/mint-finalize.js');
+  // Need canonical name to build the chat endpoint; load from job row.
+  const rows = await db.select().from(mintJobs).where(eq(mintJobs.id, parsed.data.mintJobId)).limit(1);
+  const job = rows[0];
+  if (!job?.canonicalName) {
+    sendError(res, 404, 'JOB_NOT_FOUND', `Mint job ${parsed.data.mintJobId} missing canonical name.`);
+    return;
+  }
+  try {
+    const out = await confirmFeeAndBuildAssetTx(db, {
+      ...parsed.data,
+      chatEndpoint: chatEndpointFor(job.canonicalName),
+    });
+    sendJson(res, 200, { ok: true, ...out });
+  } catch (e) {
+    console.error('[mint/build-asset-tx] failed:', e);
+    sendError(res, 500, 'BUILD_ASSET_FAILED', (e as Error).message);
+  }
+}
+
+export async function handleMintBuildGenesisTxs(
+  req: IncomingMessage,
+  res: ServerResponse,
+  db: Db,
+): Promise<void> {
+  const body = await readJsonBody(req);
+  const parsed = buildGenesisBody.safeParse(body);
+  if (!parsed.success) {
+    sendError(res, 400, 'INVALID_BODY', parsed.error.message);
+    return;
+  }
+  const { buildGenesisTxs } = await import('../services/mint-finalize.js');
+  try {
+    const out = await buildGenesisTxs(db, parsed.data);
+    sendJson(res, 200, { ok: true, ...out });
+  } catch (e) {
+    console.error('[mint/build-genesis-txs] failed:', e);
+    sendError(res, 500, 'BUILD_GENESIS_FAILED', (e as Error).message);
   }
 }
 

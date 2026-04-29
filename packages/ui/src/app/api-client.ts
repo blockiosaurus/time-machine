@@ -49,24 +49,38 @@ export interface PreviewResponse {
   ok: boolean;
   mintJobId: string;
   slug: string;
-  portraitUri: string;
-  promptCid: string;
-  portraitCid: string;
-  registrationCid: string;
-  characterMetadataCid: string;
-  characterMetadataUri: string;
+  portraitUrl: string;
   moderation: { ok: boolean; regenerated: boolean };
   mintFeeLamports: number;
-  mintFeeRecipient: string | null;
   collection: string | null;
 }
 
-export interface FinalizeResponse {
+export interface BuildFeeTxResponse {
+  ok: boolean;
+  feeTx: { id: 'fee'; base64: string };
+  mintFeeRecipient: string;
+  mintFeeLamports: number;
+}
+
+export interface BuildAssetTxResponse {
   ok: boolean;
   assetAddress: string;
+  assetTx: { id: 'create-and-register'; base64: string };
+  artefacts: {
+    promptCid: string;
+    portraitCid: string;
+    portraitUri: string;
+    registrationCid: string;
+    characterMetadataCid: string;
+    characterMetadataUri: string;
+  };
+}
+
+export interface BuildGenesisResponse {
+  ok: boolean;
   genesisTokenMint: string;
   genesisAccount: string;
-  userTransactions: Array<{ id: string; base64: string }>;
+  genesisTxs: Array<{ id: string; base64: string }>;
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
@@ -84,17 +98,33 @@ async function get<T>(path: string): Promise<T> {
 }
 
 export const api = {
+  base: apiBase,
   listCharacters: () => get<{ characters: CharacterSummary[] }>('/api/characters'),
   getCharacter: (slug: string) => get<CharacterSummary>(`/api/characters/${slug}`),
+
   canonicalize: (rawName: string, wallet: string) =>
     post<CanonicalizeResponse>('/api/mint/canonicalize', { rawName, wallet }),
   preview: (mintJobId: string, ticker: string) =>
     post<PreviewResponse>('/api/mint/preview', { mintJobId, ticker }),
-  finalize: (mintJobId: string, ownerWallet: string) =>
-    post<FinalizeResponse>('/api/mint/finalize', { mintJobId, ownerWallet }),
-  confirm: (mintJobId: string, signatures: string[]) =>
+
+  buildFeeTx: (mintJobId: string, ownerWallet: string) =>
+    post<BuildFeeTxResponse>('/api/mint/build-fee-tx', { mintJobId, ownerWallet }),
+  buildAssetTx: (mintJobId: string, ownerWallet: string, feeSignature: string) =>
+    post<BuildAssetTxResponse>('/api/mint/build-asset-tx', {
+      mintJobId,
+      ownerWallet,
+      feeSignature,
+    }),
+  buildGenesisTxs: (mintJobId: string, ownerWallet: string, assetSignature: string) =>
+    post<BuildGenesisResponse>('/api/mint/build-genesis-txs', {
+      mintJobId,
+      ownerWallet,
+      assetSignature,
+    }),
+  confirm: (mintJobId: string, ownerWallet: string, genesisSignatures: string[]) =>
     post<{ ok: boolean; character?: { slug: string } }>('/api/mint/confirm', {
       mintJobId,
-      signatures,
+      ownerWallet,
+      genesisSignatures,
     }),
 };
