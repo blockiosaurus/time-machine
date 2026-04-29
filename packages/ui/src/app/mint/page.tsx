@@ -5,8 +5,10 @@ import Link from 'next/link';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { Connection, VersionedTransaction } from '@solana/web3.js';
+import type { CreateLaunchInput } from '@metaplex-foundation/genesis';
 import { TimeMachineHeader } from '@/components/tm-header';
 import { api, type PreviewResponse } from '../api-client';
+import { registerLaunchFromWallet } from '../genesis-client';
 
 type Step =
   | { kind: 'idle' }
@@ -19,6 +21,7 @@ type Step =
   | { kind: 'awaiting-asset' }
   | { kind: 'building-genesis' }
   | { kind: 'awaiting-genesis' }
+  | { kind: 'registering-genesis' }
   | { kind: 'confirming' }
   | { kind: 'success'; slug: string }
   | { kind: 'error'; message: string };
@@ -110,7 +113,19 @@ export default function MintPage() {
         genesisSigs.push(sig);
       }
 
-      // 6. Confirm + persist.
+      // 6. Register the launch with Genesis from the user's wallet — only
+      //    the agent NFT owner can authenticate this call. If it fails we
+      //    abort BEFORE creating the character row so the on-chain state
+      //    and the DB don't desync.
+      setStep({ kind: 'registering-genesis' });
+      await registerLaunchFromWallet({
+        rpcUrl: rpcUrl(),
+        wallet,
+        genesisAccount: genesisRes.genesisAccount,
+        createLaunchInput: genesisRes.createLaunchInput as CreateLaunchInput,
+      });
+
+      // 7. Confirm + persist.
       setStep({ kind: 'confirming' });
       const conf = await api.confirm(jobId, owner, genesisSigs);
       if (conf.ok && conf.character?.slug) {
@@ -216,6 +231,7 @@ export default function MintPage() {
         {step.kind === 'awaiting-asset' && <Spinner label="Awaiting asset signature…" />}
         {step.kind === 'building-genesis' && <Spinner label="Preparing Genesis launch…" />}
         {step.kind === 'awaiting-genesis' && <Spinner label="Awaiting Genesis signatures…" />}
+        {step.kind === 'registering-genesis' && <Spinner label="Registering with Genesis…" />}
         {step.kind === 'confirming' && <Spinner label="Confirming on-chain…" />}
 
         {step.kind === 'success' && (

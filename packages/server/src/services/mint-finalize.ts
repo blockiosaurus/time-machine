@@ -16,8 +16,8 @@ import {
   buildCharacterMetadataDoc,
   buildCreateCharacterAssetTx,
   buildRegisterIdentityTx,
+  buildCreateLaunchInput,
   buildLaunchTransactions,
-  registerCharacterTokenLaunch,
   getAgentPda,
   getConfig,
   createUmi,
@@ -332,6 +332,13 @@ export interface BuildGenesisResult {
   genesisTokenMint: string;
   genesisAccount: string;
   genesisTxs: Array<{ id: string; base64: string }>;
+  /**
+   * The exact CreateLaunchInput we passed to Genesis. The client uses this
+   * to call registerLaunch from the user's wallet (only the agent owner
+   * can authenticate that HTTP call), avoiding the
+   * "Agent is not owned by the connected wallet" 403.
+   */
+  createLaunchInput: ReturnType<typeof buildCreateLaunchInput>;
 }
 
 export async function buildGenesisTxs(
@@ -357,14 +364,16 @@ export async function buildGenesisTxs(
   await fetchAssetV1(umi, toPublicKey(assetAddress));
 
   // 2. Build Genesis launch txs.
-  const genesisResult = await buildLaunchTransactions(umi, {
+  const launchArgs = {
     ownerWallet: args.ownerWallet,
     characterAssetMint: assetAddress,
     tokenName: preview.canonicalName,
     tokenTicker: preview.ticker,
     imageUri: artefacts.portraitUri,
     description: preview.bioSummary,
-  });
+  };
+  const genesisResult = await buildLaunchTransactions(umi, launchArgs);
+  const createLaunchInput = buildCreateLaunchInput(launchArgs);
 
   const genesisTxs: Array<{ id: string; base64: string }> = genesisResult.transactions.map(
     (tx: Transaction, i: number) => {
@@ -393,6 +402,7 @@ export async function buildGenesisTxs(
     genesisTokenMint: genesisResult.mintAddress,
     genesisAccount: genesisResult.genesisAccount,
     genesisTxs,
+    createLaunchInput,
   };
 }
 
@@ -448,53 +458,12 @@ export async function confirmMint(
     };
   }
 
-  // Register the launch with Genesis (drives the Genesis UI + Slack
-  // notification + indexer entry). Failures are logged + persisted so an
-  // admin can retry, but don't block the character row creation.
-  let registrationStatus: 'registered' | 'failed' | 'skipped' = 'skipped';
-  let registrationError: string | null = null;
-  if (genesisInfo.genesisAccount) {
-    try {
-      console.log(
-        `[mint/confirm] registering launch with Genesis: ` +
-        `genesisAccount=${genesisInfo.genesisAccount} mint=${assetAddr}`,
-      );
-      await registerCharacterTokenLaunch(createUmi(), {
-        genesisAccount: genesisInfo.genesisAccount,
-        ownerWallet: job.wallet,
-        characterAssetMint: assetAddr,
-        tokenName: preview.canonicalName,
-        tokenTicker: preview.ticker,
-        imageUri: artefacts.portraitUri,
-        description: preview.bioSummary,
-      });
-      registrationStatus = 'registered';
-    } catch (e) {
-      registrationStatus = 'failed';
-      registrationError = (e as Error).message;
-      console.error(
-        '[mint/confirm] registerCharacterTokenLaunch failed after retries:',
-        e,
-      );
-    }
-  }
-
-  // Persist the registration outcome on the mint_job so admins can audit
-  // / replay later.
-  await db
-    .update(mintJobs)
-    .set({
-      steps: {
-        ...steps,
-        genesis_register: {
-          status: registrationStatus,
-          error: registrationError,
-          completedAt: new Date().toISOString(),
-        },
-      },
-      updatedAt: new Date(),
-    })
-    .where(eq(mintJobs.id, args.mintJobId));
+  // Note: Genesis `registerLaunch` is performed by the client (the user's
+  // wallet adapter signs the auth handshake). Genesis API rejects the call
+  // unless the connected wallet owns the agent NFT — and the agent NFT is
+  // owned by the minter, not the server. The client calls confirm() only
+  // after a successful registerLaunch, so reaching this code path means
+  // registration succeeded.
 
   const slug = slugify(preview.canonicalName);
   const normalizedName = preview.canonicalName

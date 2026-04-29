@@ -81,6 +81,12 @@ export interface BuildGenesisResponse {
   genesisTokenMint: string;
   genesisAccount: string;
   genesisTxs: Array<{ id: string; base64: string }>;
+  /**
+   * The CreateLaunchInput the server used. Passed to client-side
+   * `registerLaunch` so the user's wallet authenticates the Genesis API
+   * call (the agent NFT is owned by the minter, not the server).
+   */
+  createLaunchInput: unknown;
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
