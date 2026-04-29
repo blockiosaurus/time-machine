@@ -38,12 +38,18 @@ interface UsePlexChatReturn {
   isAgentTyping: boolean;
   error: string | null;
   sendMessage: (content: string) => void;
-  sendWalletConnect: (address: string) => void;
+  sendWalletConnect: (address: string, signature?: string) => void;
   sendWalletDisconnect: () => void;
   sendTxResult: (correlationId: string, signature: string) => void;
   sendTxError: (correlationId: string, reason: string) => void;
   wsLog: WsLogEntry[];
   clearWsLog: () => void;
+  /**
+   * Time Machine: a signed-message challenge issued by the server when the
+   * session is bound to a character. The chat page signs this with the
+   * connected wallet and passes the signature back via `sendWalletConnect`.
+   */
+  tmAuthChallenge: string | null;
 }
 
 let messageId = 0;
@@ -57,6 +63,7 @@ export function usePlexChat({ url, token, onTransaction, onDebugEvent }: UsePlex
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [isAgentTyping, setIsAgentTyping] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [tmAuthChallenge, setTmAuthChallenge] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -140,6 +147,9 @@ export function usePlexChat({ url, token, onTransaction, onDebugEvent }: UsePlex
           switch (data.type) {
             case 'connected':
               setIsConnected(true);
+              if ('tmAuthChallenge' in data && typeof data.tmAuthChallenge === 'string') {
+                setTmAuthChallenge(data.tmAuthChallenge);
+              }
               // Flush anything queued while we were offline
               flushOutgoingQueue();
               break;
@@ -289,8 +299,8 @@ export function usePlexChat({ url, token, onTransaction, onDebugEvent }: UsePlex
   );
 
   const sendWalletConnect = useCallback(
-    (address: string) => {
-      send({ type: 'wallet_connect', address });
+    (address: string, signature?: string) => {
+      send({ type: 'wallet_connect', address, signature });
     },
     [send],
   );
@@ -326,5 +336,6 @@ export function usePlexChat({ url, token, onTransaction, onDebugEvent }: UsePlex
     sendTxError,
     wsLog,
     clearWsLog,
+    tmAuthChallenge,
   };
 }

@@ -19,12 +19,17 @@ import {
   autonomousToolNames,
   timeMachineChatToolNames,
 } from '@metaplex-agent/core';
+import {
+  checkCharacterAccess,
+  verifyWalletSignature,
+} from '@metaplex-agent/shared';
 import { RequestContext } from '@mastra/core/request-context';
 import { Session, type SimpleRateLimiter } from './session.js';
 import { getDb } from './db/index.js';
 import { characters as charactersTable, chatSessions, messages as messagesTable } from './db/schema.js';
 import { eq } from 'drizzle-orm';
 import { hashIp, checkRateLimit } from './services/rate-limit.js';
+import { randomBytes } from 'node:crypto';
 
 // Split regexes for different base58 contexts
 const BASE58_ADDRESS_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
@@ -348,6 +353,10 @@ export class PlexChatServer {
     // --- Time Machine: parse slug from URL and lazily load the character ---
     const tmSlug = this.extractTimeMachineSlug(req);
     if (tmSlug) {
+      // Issue a one-time auth challenge the client signs with their wallet
+      // before they're allowed to chat. Sent down in the connected event
+      // below.
+      session.tmAuthChallenge = this.makeAuthChallenge(session, tmSlug);
       session.characterLoadPromise = this.loadTimeMachineCharacter(
         session,
         tmSlug,
@@ -369,7 +378,11 @@ export class PlexChatServer {
     }
 
     // --- Send connected message ---
-    session.send({ type: 'connected', jid: `web:${session.id}` });
+    session.send({
+      type: 'connected',
+      jid: `web:${session.id}`,
+      tmAuthChallenge: session.tmAuthChallenge ?? undefined,
+    });
     this.emitContext(session);
 
     // --- Message handler ---
@@ -385,6 +398,20 @@ export class PlexChatServer {
    * Returns null when no slug is present (in which case we fall back to the
    * default Mastra agent — the original template behavior).
    */
+  /**
+   * Build the auth challenge the client must sign before chatting with a
+   * character. Kept short + readable so the wallet popup is recognizable.
+   */
+  private makeAuthChallenge(session: Session, slug: string): string {
+    const nonce = randomBytes(16).toString('hex');
+    return [
+      'Time Machine — chat access',
+      `character: ${slug}`,
+      `session: ${session.id}`,
+      `nonce: ${nonce}`,
+    ].join('\n');
+  }
+
   private extractTimeMachineSlug(req: IncomingMessage): string | null {
     const url = req.url ?? '/';
     // Path form: /chat/<slug> (with optional query)
@@ -631,7 +658,7 @@ export class PlexChatServer {
         }
         break;
       case 'wallet_connect':
-        await this.handleWalletConnect(session, msg.address);
+        await this.handleWalletConnect(session, msg.address, msg.signature);
         break;
       case 'wallet_disconnect':
         this.handleWalletDisconnect(session);
@@ -766,6 +793,18 @@ export class PlexChatServer {
           `Message exceeds maximum length of ${config.MAX_MESSAGE_CONTENT} characters ` +
           `(got ${content.length}).`,
         code: 'MESSAGE_TOO_LARGE',
+      });
+      return;
+    }
+
+    // Time Machine: gate chat on owner/holder verification.
+    if (session.character && !session.isAccessAllowed) {
+      session.send({
+        type: 'error',
+        error:
+          `You need to own ${session.character.canonicalName}'s NFT or hold ` +
+          `$${session.character.genesisTicker} to chat. Connect your wallet and try again.`,
+        code: 'ACCESS_DENIED',
       });
       return;
     }
@@ -1157,7 +1196,11 @@ export class PlexChatServer {
    * Handle wallet_connect: store address on the session, verify owner in autonomous mode,
    * and send confirmation.
    */
-  private async handleWalletConnect(session: Session, address: string | undefined): Promise<void> {
+  private async handleWalletConnect(
+    session: Session,
+    address: string | undefined,
+    signature?: string,
+  ): Promise<void> {
     if (!address?.trim()) {
       session.send({
         type: 'error',
@@ -1177,6 +1220,79 @@ export class PlexChatServer {
     }
 
     const config = getConfig();
+
+    // --- Time Machine character-chat gate ---
+    if (session.character) {
+      // Wait for the character row to actually be loaded before we check.
+      if (session.characterLoadPromise) {
+        try {
+          await session.characterLoadPromise;
+        } catch {
+          return; // already handled by the loader's catch
+        }
+      }
+      if (!session.tmAuthChallenge) {
+        session.send({
+          type: 'error',
+          error: 'Internal: missing auth challenge for character session',
+          code: 'NO_CHALLENGE',
+        });
+        return;
+      }
+      if (!signature) {
+        session.send({
+          type: 'error',
+          error: 'Sign-message signature is required to chat with a character.',
+          code: 'SIGNATURE_REQUIRED',
+        });
+        return;
+      }
+      const umi = createUmi();
+      const messageBytes = new TextEncoder().encode(session.tmAuthChallenge);
+      let valid = false;
+      try {
+        valid = verifyWalletSignature(umi, address, messageBytes, signature);
+      } catch (e) {
+        session.send({
+          type: 'error',
+          error: `Signature verification failed: ${(e as Error).message}`,
+          code: 'BAD_SIGNATURE',
+        });
+        return;
+      }
+      if (!valid) {
+        session.send({
+          type: 'error',
+          error: 'Signature does not match the connected wallet.',
+          code: 'BAD_SIGNATURE',
+        });
+        return;
+      }
+
+      // Signature is good — now check whether the wallet is allowed.
+      const verdict = await checkCharacterAccess(umi, {
+        wallet: address,
+        ownerWallet: session.character.ownerWallet,
+        genesisTokenMint: session.character.genesisTokenMint,
+      });
+      if (!verdict.allowed) {
+        session.isAccessAllowed = false;
+        session.send({
+          type: 'error',
+          error:
+            `Only the NFT owner or holders of $${session.character.genesisTicker} ` +
+            `can chat with ${session.character.canonicalName}. ` +
+            'Buy the token on Genesis to gain access.',
+          code: 'ACCESS_DENIED',
+        });
+        return;
+      }
+      session.isAccessAllowed = true;
+      console.log(
+        `[chat] access granted to ${address.slice(0, 8)}… for ${session.character.slug} ` +
+        `(${verdict.reason})`,
+      );
+    }
 
     // Re-resolve owner (asset may have been registered since startup)
     this.ownerWallet = await resolveOwner(config.AGENT_ASSET_ADDRESS ?? null);

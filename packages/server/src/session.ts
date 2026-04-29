@@ -59,6 +59,17 @@ export class Session {
   ipHash: string | null = null;
   /** Time Machine: in-flight character load (null if no slug supplied). */
   characterLoadPromise: Promise<void> | null = null;
+  /**
+   * Time Machine: sign-message challenge issued at connect time. Client must
+   * return its base58 ed25519 signature in `wallet_connect.signature`.
+   */
+  tmAuthChallenge: string | null = null;
+  /**
+   * Time Machine: true once the wallet has proven ownership of either the
+   * character NFT or a positive Genesis token balance. Chat messages are
+   * gated on this when `character` is set.
+   */
+  isAccessAllowed = false;
 
   // Conversation
   conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [];

@@ -13,6 +13,12 @@ export interface ClientChatMessage {
 export interface ClientWalletConnect {
   type: 'wallet_connect';
   address: string;
+  /**
+   * Time Machine: base58 ed25519 signature of the auth challenge bytes
+   * issued in `ServerConnected.tmAuthChallenge`. Required when the session
+   * is bound to a character (`?slug=…`); ignored otherwise.
+   */
+  signature?: string;
 }
 
 export interface ClientWalletDisconnect {
@@ -43,6 +49,12 @@ export type ClientMessage =
 export interface ServerConnected {
   type: 'connected';
   jid: string;
+  /**
+   * Time Machine: a one-time UTF-8 challenge the client must sign with
+   * their wallet before the server allows chat with the character. Only
+   * present on character-bound sessions (`?slug=…`).
+   */
+  tmAuthChallenge?: string;
 }
 
 export interface ServerChatMessage {

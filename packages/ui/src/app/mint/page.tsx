@@ -7,6 +7,7 @@ import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { Connection, VersionedTransaction } from '@solana/web3.js';
 import type { CreateLaunchInput } from '@metaplex-foundation/genesis';
 import { TimeMachineHeader } from '@/components/tm-header';
+import { MintProgress, type MintPhaseKind } from '@/components/mint-progress';
 import { api, type PreviewResponse } from '../api-client';
 import { registerLaunchFromWallet } from '../genesis-client';
 
@@ -226,20 +227,30 @@ export default function MintPage() {
           </div>
         )}
 
-        {step.kind === 'awaiting-fee' && <Spinner label="Awaiting fee signature in your wallet…" />}
-        {step.kind === 'pinning' && <Spinner label="Pinning to Irys…" />}
-        {step.kind === 'awaiting-asset' && <Spinner label="Awaiting asset signature…" />}
-        {step.kind === 'building-genesis' && <Spinner label="Preparing Genesis launch…" />}
-        {step.kind === 'awaiting-genesis' && <Spinner label="Awaiting Genesis signatures…" />}
-        {step.kind === 'registering-genesis' && <Spinner label="Registering with Genesis…" />}
-        {step.kind === 'confirming' && <Spinner label="Confirming on-chain…" />}
-
-        {step.kind === 'success' && (
-          <div className="mt-10 rounded-md border border-tm-gold-400/40 bg-tm-gold-200/5 p-5">
-            <p className="tm-headline text-lg text-tm-gold-50">Minted.</p>
-            <Link href={`/chat/${step.slug}`} className="mt-2 inline-block tm-link-gold underline">
-              Speak with your character →
-            </Link>
+        {(step.kind === 'awaiting-fee' ||
+          step.kind === 'pinning' ||
+          step.kind === 'awaiting-asset' ||
+          step.kind === 'building-genesis' ||
+          step.kind === 'awaiting-genesis' ||
+          step.kind === 'registering-genesis' ||
+          step.kind === 'confirming' ||
+          step.kind === 'success') && (
+          <div className="mt-10">
+            <MintProgress step={step.kind as MintPhaseKind} />
+            {step.kind === 'success' && (
+              <div className="mt-6 rounded-md border border-tm-gold-400/40 bg-tm-gold-200/5 p-5 animate-tm-fade-in">
+                <p className="tm-headline text-lg text-tm-gold-50">
+                  {/* Final flourish */}
+                  Welcome them to the salon.
+                </p>
+                <Link
+                  href={`/chat/${step.slug}`}
+                  className="mt-2 inline-block tm-link-gold underline"
+                >
+                  Speak with your character →
+                </Link>
+              </div>
+            )}
           </div>
         )}
 
