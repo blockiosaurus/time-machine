@@ -82,6 +82,15 @@ ALTER TABLE mint_jobs ADD COLUMN IF NOT EXISTS portrait_bytes bytea;
 ALTER TABLE mint_jobs ADD COLUMN IF NOT EXISTS prompt_text    text;
 ALTER TABLE mint_jobs ADD COLUMN IF NOT EXISTS fee_signature  text;
 
+-- Refresh the status CHECK constraint to include the new awaiting_fee /
+-- fee_paid states. CREATE TABLE IF NOT EXISTS leaves the original
+-- constraint in place when the table already exists, so we drop+readd.
+ALTER TABLE mint_jobs DROP CONSTRAINT IF EXISTS mint_jobs_status_check;
+ALTER TABLE mint_jobs ADD CONSTRAINT mint_jobs_status_check
+  CHECK (status IN ('pending','canonicalizing','fuzzy_match_failed',
+                    'generating','awaiting_fee','fee_paid',
+                    'awaiting_sig','on_chain','failed'));
+
 CREATE TABLE IF NOT EXISTS moderation_tickets (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   character_id uuid NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
