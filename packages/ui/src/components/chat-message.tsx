@@ -68,8 +68,8 @@ export function ChatMessageBubble({ message }: ChatMessageProps) {
       <div
         className={`max-w-[75%] rounded-2xl px-4 py-2.5 ${
           isUser
-            ? 'bg-indigo-600 text-white'
-            : 'bg-zinc-800 text-zinc-100'
+            ? 'border border-tm-gold-600/40 bg-tm-gold-200/10 text-tm-gold-50'
+            : 'border border-tm-gold-600/15 bg-tm-ink-800/60 text-zinc-100'
         }`}
       >
         {isUser ? (
@@ -89,7 +89,7 @@ export function ChatMessageBubble({ message }: ChatMessageProps) {
         )}
         <p
           className={`mt-1 text-[10px] ${
-            isUser ? 'text-indigo-200' : 'text-zinc-500'
+            isUser ? 'text-tm-gold-400/80' : 'text-zinc-500'
           }`}
         >
           {message.timestamp.toLocaleTimeString([], {

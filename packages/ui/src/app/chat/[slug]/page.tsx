@@ -49,9 +49,6 @@ export default function ChatPage({ params }: PageProps) {
     onDebugEvent: () => undefined,
   });
 
-  // When the wallet is connected and we have an unsigned challenge from the
-  // server, prompt for a sign-message and forward to the server. Tracked in
-  // a ref so we don't re-prompt on every render.
   useEffect(() => {
     let cancelled = false;
     async function run() {
@@ -69,7 +66,6 @@ export default function ChatPage({ params }: PageProps) {
         sendWalletConnect(wallet.publicKey.toBase58(), bs58.encode(sig));
         signedFor.current = key;
       } catch (e) {
-        // User rejected. They can click "Connect & Sign" again.
         signedFor.current = null;
         console.warn('User declined sign-message:', (e as Error).message);
       }
@@ -82,104 +78,200 @@ export default function ChatPage({ params }: PageProps) {
 
   if (loadError) {
     return (
-      <main className="grid min-h-screen place-items-center text-tm-gold-200/70">
-        Character not found.{' '}
-        <Link href="/" className="ml-2 tm-link-gold underline">Back to the gallery</Link>
+      <main className="min-h-screen">
+        <TimeMachineHeader />
+        <div className="mx-auto mt-20 max-w-md px-6 text-center text-tm-gold-200/70">
+          <p className="tm-headline text-2xl">Lost in time.</p>
+          <p className="mt-2 text-sm text-zinc-400">
+            We couldn't find that character.
+          </p>
+          <Link
+            href="/"
+            className="tm-link-gold mt-4 inline-block text-sm underline"
+          >
+            ← Return to the gallery
+          </Link>
+        </div>
       </main>
     );
   }
   if (!character) {
-    return <main className="grid min-h-screen place-items-center text-tm-gold-200/70">Loading…</main>;
+    return (
+      <main className="min-h-screen">
+        <TimeMachineHeader />
+        <div className="mx-auto mt-20 grid max-w-5xl grid-cols-1 gap-6 px-6 lg:grid-cols-[340px_1fr]">
+          <div className="space-y-4">
+            <div className="tm-skeleton aspect-square w-full rounded-lg" />
+            <div className="tm-skeleton h-6 w-3/5 rounded" />
+            <div className="tm-skeleton h-4 w-2/5 rounded" />
+            <div className="tm-skeleton h-20 w-full rounded" />
+          </div>
+          <div className="tm-skeleton min-h-[60vh] rounded-lg" />
+        </div>
+      </main>
+    );
   }
 
   const tradeUrl = `https://genesis.metaplex.com/token/${character.genesisTokenMint}`;
-  const accessDenied = !!error && error.toLowerCase().includes('access') ;
+  const accessDenied = !!error && error.toLowerCase().includes('access');
+  const showWalletPrompt = !wallet.publicKey;
+  const inputDisabled = showWalletPrompt || accessDenied;
+  const inputDisabledReason = showWalletPrompt
+    ? 'Connect your wallet to begin…'
+    : accessDenied
+      ? `Hold $${character.genesisTicker} to chat…`
+      : undefined;
 
   return (
     <main className="min-h-screen">
       <TimeMachineHeader />
 
-      <div className="mx-auto grid max-w-6xl grid-cols-1 gap-6 px-6 py-8 lg:grid-cols-[340px_1fr]">
+      <div className="mx-auto grid max-w-6xl grid-cols-1 gap-6 px-4 py-8 sm:px-6 lg:grid-cols-[340px_1fr]">
         <aside className="space-y-4">
-          <div className="tm-card overflow-hidden rounded-lg">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={character.portraitUri}
-              alt={character.canonicalName}
-              className="aspect-square w-full object-cover"
-            />
+          {/* Character card */}
+          <div className="tm-card overflow-hidden rounded-lg tm-card-rise">
+            <div className="relative">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={character.portraitUri}
+                alt={character.canonicalName}
+                className="aspect-square w-full object-cover"
+              />
+              <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-tm-ink-950/90 to-transparent" />
+              <div className="absolute inset-x-0 bottom-0 p-4">
+                <h2 className="tm-headline text-2xl font-bold text-tm-gold-50 drop-shadow-md">
+                  {character.canonicalName}
+                </h2>
+                <p className="mt-0.5 text-xs uppercase tracking-widest text-tm-gold-200/90 drop-shadow">
+                  {character.birthYear ?? '?'} – {character.deathYear ?? '?'}
+                </p>
+              </div>
+            </div>
             <div className="p-4">
-              <h2 className="tm-headline text-2xl font-bold text-tm-gold-50">{character.canonicalName}</h2>
-              <p className="mt-1 text-xs uppercase tracking-widest text-tm-gold-400/80">
-                {character.birthYear ?? '?'} – {character.deathYear ?? '?'} · ${character.genesisTicker}
-              </p>
-              <p className="mt-3 text-sm text-zinc-300">{character.bioSummary}</p>
+              <p className="text-sm leading-relaxed text-zinc-300">{character.bioSummary}</p>
             </div>
           </div>
 
-          <div className="tm-card rounded-lg p-4">
-            <h3 className="text-xs uppercase tracking-[0.3em] text-tm-gold-400/80">
-              Token · ${character.genesisTicker}
-            </h3>
-            <p className="mt-2 break-all font-mono text-[10px] text-zinc-500">{character.genesisTokenMint}</p>
+          {/* Token panel */}
+          <div className="tm-card rounded-lg p-4 tm-card-rise" style={{ animationDelay: '60ms' }}>
+            <div className="flex items-baseline justify-between">
+              <h3 className="tm-headline text-lg font-semibold text-tm-gold-50">
+                ${character.genesisTicker}
+              </h3>
+              <span className="text-[10px] uppercase tracking-[0.25em] text-tm-gold-400/80">
+                Genesis
+              </span>
+            </div>
+            <p className="mt-1 break-all font-mono text-[10px] text-zinc-500">
+              {character.genesisTokenMint}
+            </p>
             <a
               href={tradeUrl}
               target="_blank"
               rel="noreferrer"
               className="tm-button-primary mt-4 block rounded-md py-2 text-center text-sm"
             >
-              Buy on Genesis →
+              Trade on Genesis →
             </a>
-            <p className="mt-3 text-[11px] leading-relaxed text-zinc-500">
-              Owner-or-holder access only. Holding any ${character.genesisTicker} grants chat. Owner: <span className="font-mono">{shorten(character.ownerWallet)}</span>
+            <div className="mt-3 flex items-center gap-2 text-[11px] text-zinc-500">
+              <svg viewBox="0 0 12 12" className="h-3 w-3 flex-shrink-0 text-tm-gold-400" fill="currentColor">
+                <circle cx="6" cy="6" r="2" />
+              </svg>
+              <span>
+                Owner: <span className="font-mono">{shorten(character.ownerWallet)}</span>
+              </span>
+            </div>
+            <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+              Holding any ${character.genesisTicker} grants chat access.
             </p>
           </div>
+
+          {/* Status banner — only on real errors, not access-denied (handled inline) */}
+          {error && !accessDenied && (
+            <div className="rounded-md border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300 tm-card-rise">
+              {error}
+            </div>
+          )}
+          {isReconnecting && (
+            <div className="rounded-md border border-tm-gold-400/30 bg-tm-gold-200/5 p-3 text-xs text-tm-gold-200 tm-card-rise">
+              Reconnecting…
+            </div>
+          )}
         </aside>
 
-        <section className="tm-card rounded-lg p-4">
-          {!wallet.publicKey && (
-            <div className="mb-4 rounded-md border border-tm-gold-400/40 bg-tm-gold-200/5 p-4">
-              <p className="text-sm text-tm-gold-50">
-                Connect your wallet to chat with {character.canonicalName}.
-              </p>
-              <p className="mt-1 text-xs text-zinc-400">
-                You'll be asked to sign a one-time message proving ownership.
-              </p>
-              <div className="mt-3">
-                <WalletMultiButton />
-              </div>
-            </div>
+        <section className="tm-card relative flex min-h-[70vh] flex-col rounded-lg p-2 sm:p-3 tm-card-rise" style={{ animationDelay: '120ms' }}>
+          {showWalletPrompt && <WalletGate />}
+          {accessDenied && !showWalletPrompt && (
+            <AccessDeniedBanner
+              ticker={character.genesisTicker}
+              tradeUrl={tradeUrl}
+            />
           )}
-          {accessDenied && (
-            <div className="mb-4 rounded-md border border-red-500/30 bg-red-500/10 p-4">
-              <p className="text-sm text-red-300">{error}</p>
-              <p className="mt-2 text-xs text-zinc-400">
-                Buy ${character.genesisTicker} on Genesis to unlock chat, then refresh.
-              </p>
-              <a
-                href={tradeUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="tm-link-gold mt-2 inline-block text-sm underline"
-              >
-                Buy on Genesis →
-              </a>
-            </div>
-          )}
-          {error && !accessDenied && (
-            <div className="mb-2 rounded bg-red-500/10 p-2 text-xs text-red-300">{error}</div>
-          )}
-          {isReconnecting && <div className="mb-2 text-xs text-tm-gold-400">Reconnecting…</div>}
           <ChatPanel
             messages={messages}
             isConnected={isConnected}
             isAgentTyping={isAgentTyping}
             isWalletConnected={!!wallet.publicKey}
+            character={character}
+            inputDisabled={inputDisabled}
+            inputDisabledReason={inputDisabledReason}
             onSendMessage={sendMessage}
           />
         </section>
       </div>
     </main>
+  );
+}
+
+function WalletGate() {
+  return (
+    <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-tm-ink-950/85 backdrop-blur-sm tm-card-rise">
+      <div className="max-w-sm px-6 text-center">
+        <h3 className="tm-headline text-2xl font-semibold text-tm-gold-50">
+          Step inside
+        </h3>
+        <p className="mt-2 text-sm text-zinc-400">
+          Connect a wallet and sign one short message to prove you're allowed in the room.
+          You'll only be asked once per session.
+        </p>
+        <div className="mt-5 flex justify-center">
+          <WalletMultiButton />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AccessDeniedBanner({
+  ticker,
+  tradeUrl,
+}: {
+  ticker: string;
+  tradeUrl: string;
+}) {
+  return (
+    <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-tm-ink-950/85 backdrop-blur-sm tm-card-rise">
+      <div className="max-w-md px-6 text-center">
+        <h3 className="tm-headline text-2xl font-semibold text-tm-gold-50">
+          A token is required.
+        </h3>
+        <p className="mt-2 text-sm text-zinc-400">
+          Time Machine reserves conversation for the NFT owner and ${ticker} holders.
+          Buy any amount of the token to unlock chat for this session.
+        </p>
+        <a
+          href={tradeUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="tm-button-primary mt-5 inline-block rounded-md px-5 py-2"
+        >
+          Buy ${ticker} on Genesis →
+        </a>
+        <p className="mt-3 text-[11px] text-zinc-500">
+          Refresh this page after your buy confirms.
+        </p>
+      </div>
+    </div>
   );
 }
 

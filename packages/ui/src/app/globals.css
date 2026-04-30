@@ -69,6 +69,115 @@ body {
 }
 .tm-card:hover { border-color: rgba(212, 165, 116, 0.45); }
 
+/* ----------------------------------------------------------------------
+   Wallet adapter overrides
+   wallet-adapter-react-ui ships purple-themed buttons + modal that look
+   alien against the gold/ink palette. Tighten everything to match.
+   ---------------------------------------------------------------------- */
+.wallet-adapter-button-trigger,
+.wallet-adapter-button {
+  background: linear-gradient(180deg, var(--tm-gold-200) 0%, var(--tm-gold-400) 100%) !important;
+  color: var(--tm-ink-950) !important;
+  border: 1px solid var(--tm-gold-600) !important;
+  border-radius: 0.375rem !important;
+  font-family: var(--font-serif) !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.01em !important;
+  height: 38px !important;
+  padding: 0 16px !important;
+  font-size: 0.875rem !important;
+  transition: filter 0.15s ease;
+}
+.wallet-adapter-button-trigger:hover,
+.wallet-adapter-button:not([disabled]):hover {
+  background: linear-gradient(180deg, var(--tm-gold-200) 0%, var(--tm-gold-400) 100%) !important;
+  filter: brightness(1.08);
+}
+.wallet-adapter-button[disabled] { opacity: 0.5; }
+
+.wallet-adapter-modal-wrapper {
+  background: var(--tm-ink-900) !important;
+  border: 1px solid rgba(212, 165, 116, 0.2) !important;
+  box-shadow: 0 0 0 1px rgba(245, 212, 160, 0.08), 0 30px 60px rgba(0, 0, 0, 0.55) !important;
+}
+.wallet-adapter-modal-title {
+  font-family: var(--font-serif) !important;
+  color: var(--tm-gold-50) !important;
+}
+.wallet-adapter-modal-list {
+  background: transparent !important;
+}
+.wallet-adapter-modal-list .wallet-adapter-button {
+  background: var(--tm-ink-800) !important;
+  color: var(--tm-gold-50) !important;
+  border: 1px solid rgba(212, 165, 116, 0.18) !important;
+}
+.wallet-adapter-modal-list .wallet-adapter-button:hover {
+  background: rgba(212, 165, 116, 0.08) !important;
+  border-color: rgba(212, 165, 116, 0.45) !important;
+}
+.wallet-adapter-modal-button-close {
+  background: transparent !important;
+}
+.wallet-adapter-dropdown-list {
+  background: var(--tm-ink-900) !important;
+  border: 1px solid rgba(212, 165, 116, 0.2) !important;
+}
+.wallet-adapter-dropdown-list-item {
+  color: var(--tm-gold-50) !important;
+  font-family: var(--font-serif) !important;
+}
+.wallet-adapter-dropdown-list-item:hover {
+  background: rgba(212, 165, 116, 0.08) !important;
+}
+
+/* Skeleton shimmer for loading states. */
+@keyframes tm-shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.tm-skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(212, 165, 116, 0.04) 0%,
+    rgba(245, 212, 160, 0.10) 50%,
+    rgba(212, 165, 116, 0.04) 100%
+  );
+  background-size: 800px 100%;
+  animation: tm-shimmer 1.6s linear infinite;
+  border-radius: 0.375rem;
+}
+
+/* Card stagger fade-in. */
+@keyframes tm-card-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.tm-card-rise {
+  animation: tm-card-rise 0.4s ease-out both;
+}
+
+/* Selection */
+::selection {
+  background: rgba(245, 212, 160, 0.3);
+  color: var(--tm-gold-50);
+}
+
+/* Subtle gold scrollbar in webkit. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(212, 165, 116, 0.18);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(212, 165, 116, 0.4);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
 
 /* Markdown content styles for agent messages */
 .markdown-content h1,
