@@ -1,6 +1,12 @@
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
-import { ok, readAgentContext } from '@metaplex-agent/shared';
+import {
+  getConfig,
+  networkFromRpcUrl,
+  ok,
+  readAgentContext,
+  tokenTradeUrl,
+} from '@metaplex-agent/shared';
 
 /**
  * v1: returns a deep-link to the Genesis trading UI. The chat UI presents
@@ -38,7 +44,10 @@ export const buyMyToken = createTool({
         message: 'No Genesis token registered for this character yet.',
       });
     }
-    const tradeUrl = `https://genesis.metaplex.com/token/${character.genesisTokenMint}`;
+    const tradeUrl = tokenTradeUrl(
+      networkFromRpcUrl(getConfig().SOLANA_RPC_URL),
+      character.genesisTokenMint,
+    );
     return ok({
       status: 'ok',
       tradeUrl,

@@ -1,6 +1,12 @@
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
-import { ok, readAgentContext } from '@metaplex-agent/shared';
+import {
+  getConfig,
+  networkFromRpcUrl,
+  ok,
+  readAgentContext,
+  tokenTradeUrl,
+} from '@metaplex-agent/shared';
 
 export const getTokenInfo = createTool({
   id: 'get_token_info',
@@ -29,7 +35,10 @@ export const getTokenInfo = createTool({
         message: 'No Genesis token registered for this character.',
       });
     }
-    const tradeUrl = `https://genesis.metaplex.com/token/${character.genesisTokenMint}`;
+    const tradeUrl = tokenTradeUrl(
+      networkFromRpcUrl(getConfig().SOLANA_RPC_URL),
+      character.genesisTokenMint,
+    );
     return ok({
       status: 'ok',
       token: {

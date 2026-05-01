@@ -9,6 +9,7 @@ import {
 } from '@metaplex-foundation/genesis';
 import { type Umi, type PublicKey } from '@metaplex-foundation/umi';
 import { getConfig } from '../config.js';
+import { networkFromRpcUrl } from './links.js';
 
 export interface LaunchCharacterTokenArgs {
   /** Wallet that will sign the launch transactions (the NFT minter). */
@@ -52,9 +53,8 @@ export function buildTokenMetadata(args: LaunchCharacterTokenArgs): TokenMetadat
  * assets, regardless of how many times we retry.
  */
 function pickGenesisNetwork(): SvmNetwork {
-  const rpc = getConfig().SOLANA_RPC_URL.toLowerCase();
-  if (rpc.includes('devnet') || rpc.includes('testnet')) return 'solana-devnet';
-  return 'solana-mainnet';
+  const network = networkFromRpcUrl(getConfig().SOLANA_RPC_URL);
+  return network === 'mainnet' ? 'solana-mainnet' : 'solana-devnet';
 }
 
 export function buildCreateLaunchInput(args: LaunchCharacterTokenArgs): CreateLaunchInput {

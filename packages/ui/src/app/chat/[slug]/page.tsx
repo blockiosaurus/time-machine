@@ -5,6 +5,7 @@ import Link from 'next/link';
 import bs58 from 'bs58';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
+import { networkFromRpcUrl, tokenTradeUrl } from '@metaplex-agent/shared/dist/time-machine/links';
 import { ChatPanel } from '@/components/chat-panel';
 import { TimeMachineHeader } from '@/components/tm-header';
 import { usePlexChat } from '@/hooks/use-plexchat';
@@ -112,7 +113,10 @@ export default function ChatPage({ params }: PageProps) {
     );
   }
 
-  const tradeUrl = `https://genesis.metaplex.com/token/${character.genesisTokenMint}`;
+  const network = networkFromRpcUrl(
+    process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? 'https://api.devnet.solana.com',
+  );
+  const tradeUrl = tokenTradeUrl(network, character.genesisTokenMint);
   const accessDenied = !!error && error.toLowerCase().includes('access');
   const showWalletPrompt = !wallet.publicKey;
   const inputDisabled = showWalletPrompt || accessDenied;
