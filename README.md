@@ -1,625 +1,178 @@
-# Metaplex Agent Template
+# Time Machine
 
-A pnpm monorepo template for building AI agents that integrate with the [Metaplex Agent Registry](https://agents.metaplex.com). Uses [Mastra](https://mastra.ai) as the agent framework, [Metaplex Umi](https://github.com/metaplex-foundation/umi) as the Solana toolkit, and the PlexChat WebSocket protocol for real-time frontend communication.
+> An on-chain salon of the dead. Mint a historical figure as an NFT, launch their Genesis token, and let the world chat with them in character. Owners earn from the token's creator fees as the world talks to their figure.
 
-Out of the box you get a working Solana agent with balance queries, SOL/token transfers, and transaction lookups -- ready to extend with your own tools.
+Each figure on Time Machine is one canonical NFT, one Genesis token, and one AI persona who refuses to break character — even when you ask George Washington about TikTok.
 
 ---
 
-## Which mode am I?
+## The pitch (for marketing)
 
-This template supports two operating modes. Pick one before you go further — almost every decision downstream flows from it.
+**One-liner.** Chat with history, on-chain. Time Machine turns historical figures into AI-backed NFTs whose creator fees flow to the NFT owner.
 
-| | **Public mode** | **Autonomous mode** |
-|---|---|---|
-| **Who signs transactions** | End users (browser wallet) | The agent (its own keypair) |
-| **Typical shape** | Multi-user chatbot behind a UI | Headless daemon / cron / trading bot |
-| **You want this if** | Users interact via chat and approve each tx in Phantom / Solflare | The agent runs on its own schedule and nobody is in the loop |
-| **Example products** | Wallet cleanup bot, mint helper, token launch assistant, portfolio advisor | Treasury rebalancer, strategy bot, automated buybacks, scheduled payouts |
-| **`.env` setting** | `AGENT_MODE=public` | `AGENT_MODE=autonomous` + `BOOTSTRAP_WALLET=<pubkey>` |
-| **UI package useful?** | Yes — drop-in chat interface | Usually no — consider deleting `packages/ui/` |
-| **Deployment shape** | Long-lived WS server behind nginx/TLS, public ingress | Background worker, no public ingress, keypair in a secrets manager |
+**The hook.** Every character is canonical (no two Albert Einsteins), tied to a Solana NFT in the *Time Machine* Metaplex Core collection, and paired with a Genesis bonding-curve token. Conversation is gated to the NFT owner and holders of that figure's token. The owner earns SOL from creator fees as the world buys, sells, and talks to their figure.
 
-**Unsure? Pick `public` — it's the default and the built-in UI lets you see everything working in minutes.** You can switch later by editing one env var.
+**Why people care.**
+- **Talk to anyone in history.** Einstein on relativity, Cleopatra on power, Sun Tzu on rivals. Every persona is generated from a curated meta-prompt with explicit anachronism guidance — they react in character to anything past their lifetime.
+- **One canonical NFT per figure.** Fuzzy-match dedup at mint time means there is exactly one *Albert Einstein*. Owning it is owning the franchise.
+- **Built-in revenue.** A Genesis bonding-curve token launches with every mint. Creator fees flow to the NFT owner via the agent's PDA — no separate setup, no royalty splits to manage.
+- **Scarcity by design.** Mint requires the figure to be real, deceased ≥ 25 years, and not previously minted under any reasonable spelling.
+- **Pure Metaplex stack.** Core (NFT), Agent Registry (identity), Genesis (token launch). No bridges, no aggregators, no third-party indexers.
 
-**Want to prune the template for a single-mode fork?** Run `pnpm bootstrap` and the script will delete the code paths, env vars, and packages that don't apply to your chosen mode.
+**Numbers and primitives.**
+- Mint fee: **0.25 SOL** flat.
+- Network: **Solana**, devnet or mainnet.
+- NFT standard: **Metaplex Core**.
+- Token standard: **Metaplex Genesis** bonding curve.
+- Identity: **Metaplex Agent Registry** (EIP-8004 v1 registration document).
+- LLM: **Anthropic** or **OpenAI** for chat; cheap utility model for canonicalization, prompt generation, and moderation.
+- Storage: **Irys** (system prompt, portrait, registration doc, metadata).
 
-See [Agent Modes](#agent-modes) below for the full architectural detail, and [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md) for production recipes per mode.
+**Access model.** Chat with a figure requires the connecting wallet to either (a) own that figure's NFT or (b) hold any positive amount of its Genesis token. Owners can chat freely; everyone else has to buy in. Cost-control by alignment: only people with skin in the game can ring up the LLM bill.
+
+**Audience.** Memecoin traders who want a story behind the ticker. NFT collectors who want utility beyond a JPEG. History nerds who want to argue with Newton.
+
+---
+
+## How it works
+
+```
+   Mint flow (one user click → 3 wallet popups)
+   ─────────────────────────────────────────────
+   Canonicalize  →  Preview  →  Pay fee  →  Mint NFT + Register agent
+   (LLM)            (LLM +       (0.25       (user-paid; server retains
+   fuzzy match)     image gen)   SOL)        update authority for moderation)
+                                              │
+                                              ▼
+                                    Launch Genesis token (bonding curve)
+                                              │
+                                              ▼
+                                    Register launch with Genesis API
+                                    (user wallet authenticates)
+
+   Chat flow (per character at /chat/<slug>)
+   ─────────────────────────────────────────
+   Connect wallet  →  Sign challenge  →  Server checks ownership/holding  →  Chat
+                                          │
+                                          └─ Allow if NFT owner OR token balance > 0
+                                          └─ Deny otherwise (CTA: buy on Genesis)
+```
+
+The character's AI persona is generated once at mint time using a versioned meta-prompt that bakes in:
+- Voice and rhetorical style appropriate to the era.
+- Core beliefs, signature works, blind spots.
+- An **anachronism clause** so the agent reacts in character to any post-death event.
+- A **persona-stability clause** to prevent jailbreaks.
+
+The system prompt is pinned to Irys for permanent provenance and stored in the database for hot-loading at chat time. Admins can regenerate prompts or portraits via wallet-gated endpoints; owners cannot edit (they earn — they don't curate).
+
+---
+
+## Quick start
+
+### Prerequisites
+- Node.js ≥ 20, pnpm ≥ 9
+- Postgres (locally via OrbStack/Docker; in prod via Railway add-on)
+- Anthropic or OpenAI API key (chat) + OpenAI API key (image generation)
+- A funded Solana wallet for the agent keypair (devnet airdrop or a real wallet)
+
+### Local dev
+
+```bash
+# 1. clone + install
+git clone <your-fork-of-time-machine> time-machine
+cd time-machine
+pnpm install
+
+# 2. set env (see .env.example for the full list — most have sensible defaults)
+cp .env.example .env
+#    fill in: AGENT_KEYPAIR, WEB_CHANNEL_TOKEN, ANTHROPIC_API_KEY (or OPENAI_API_KEY),
+#             OPENAI_IMAGE_API_KEY, ADMIN_WALLETS
+
+# 3. start Postgres (auto-seeded via docker-compose) + the server
+pnpm dev               # brings up Postgres on :5433 + builds shared/core + starts server
+pnpm dev:ui            # in another shell, runs the Next.js UI on :3001
+
+# 4. one-time bootstrap of the on-chain collection (devnet)
+pnpm tsx scripts/create-collection.ts
+#    paste the printed COLLECTION_ADDRESS=… into your .env
+
+# 5. (optional) seed the gallery with the 10 starter characters
+pnpm tsx scripts/seed-characters.ts
+```
+
+Visit http://localhost:3001 — gallery is at `/`, mint at `/mint`, chat at `/chat/<slug>`.
+
+### Production (Railway)
+
+1. Create a Railway project, add a Postgres add-on, deploy this repo as a Dockerfile service. `railway.json` is preconfigured to run `node scripts/db-migrate.mjs` as a `preDeployCommand` (idempotent schema migrations).
+2. Set the env vars on the server service (see `docs/TIME_MACHINE.md` for the full list).
+3. Deploy the UI separately to Vercel (the server's Dockerfile excludes the UI build). Point `NEXT_PUBLIC_WS_HOST` at your Railway server's domain, set `NEXT_PUBLIC_WS_TOKEN` to the same `WEB_CHANNEL_TOKEN` as the server.
+4. Edit `packages/ui/public/collection/metadata.json` to use your domain so the on-chain collection metadata resolves, then run `pnpm tsx scripts/create-collection.ts` against prod RPC + keypair.
+5. Optionally seed the gallery via `scripts/seed-characters.ts`.
+
+Full step-by-step in [`docs/TIME_MACHINE.md`](./docs/TIME_MACHINE.md).
 
 ---
 
 ## Architecture
 
 ```
-+-----------------------------------------------------+
-|                     Frontend                         |
-|    (metaplex.com, @metaplex-agent/ui, or any WS      |
-|     client with wallet support)                      |
-+---------------------------+--------------------------+
-                            |
-                      PlexChat Protocol
-                     (WebSocket + JSON)
-                            |
-+---------------------------+--------------------------+
-|                  @metaplex-agent/server               |
-|                                                       |
-|  - Authenticates WebSocket connections                |
-|  - Manages per-session wallet state                   |
-|  - Routes messages to the Mastra agent                |
-|  - Sends responses, typing indicators, and            |
-|    transactions back to the originating session       |
-+---------+----------------------------+---------------+
-          |                            |
-          v                            v
-+---------+----------+   +------------+---------------+
-| @metaplex-agent/core|   | @metaplex-agent/shared      |
-|                     |   |                              |
-| - Mastra Agent def  |   | - PlexChat protocol types    |
-| - System prompt     |   | - Env config (Zod-validated) |
-| - Tool registry     |   | - Umi factory (RPC + signer) |
-| - Solana tools      |   | - submitOrSend() helper      |
-+---------------------+   | - AgentContext types          |
-                           +------------------------------+
+                                 ┌────────────┐
+                                 │  Browser   │
+                                 │  (Next.js) │
+                                 └─────┬──────┘
+                       HTTP            │            WSS (PlexChat)
+                ┌──────────────────────┴──────────────────────┐
+                ▼                                              ▼
+   /api/mint/* (canonicalize → preview                 /chat/<slug> per session
+   → build-fee → build-asset → build-genesis           - owner/holder gate
+   → confirm)                                          - rate limited per IP+character
+                                                       - persona prompt loaded from DB
+                ▼                                              ▼
+   Postgres (mint_jobs, characters, sessions, messages, moderation_tickets, spend_log)
+                ▼
+   On-chain (Solana): MPL Core asset + Agent Registry + Genesis launch
+   Off-chain: Irys (prompt JSON, portrait, EIP-8004 registration, character metadata)
+   LLMs: Anthropic / OpenAI for chat; same provider's cheap model for utility calls
 ```
 
-**Data flow for a chat message:**
+### Repository layout
+- `packages/server` — Node WebSocket + HTTP server (mint endpoints, chat, admin).
+- `packages/core` — Mastra agent factory + meta-prompt + chat tools (`get_token_info`, `buy_my_token`).
+- `packages/shared` — Umi factory, time-machine SDK wrappers (Genesis, Agent Registry, Core), access-check helpers.
+- `packages/ui` — Next.js 15 app (App Router) for the public site + mint wizard + chat.
+- `scripts/` — bootstrap (`create-collection.ts`), seed (`seed-characters.ts`), migrate (`db-migrate.mjs`).
+- `docs/` — design doc (`plans/2026-04-27-time-machine-design.md`), production guide (`TIME_MACHINE.md`).
 
-1. Frontend sends `{ type: "message", content: "..." }` over WebSocket.
-2. `server` authenticates, sets typing indicator, invokes the Mastra agent.
-3. Agent selects and runs tools from `core` (which use `shared` for Umi and transactions).
-4. In **public mode**, transactions are serialized and pushed back over the WebSocket for the user to sign. In **autonomous mode**, the agent signs and submits directly.
-5. Agent text response is sent back to the originating session (each WebSocket connection is isolated — see "Session Model" in [`WEBSOCKET_PROTOCOL.md`](./WEBSOCKET_PROTOCOL.md)).
+### Data flow at a glance
+1. **Mint** — orchestrator persists artefacts to `mint_jobs` row by row; image bytes and prompt text are held in Postgres until the user pays the fee, at which point they're pinned to Irys. This means abandoned previews cost nothing on-chain and nothing on Irys.
+2. **Chat** — `/chat/<slug>` opens a WebSocket with the slug as a query param. The server loads the character row, instantiates a fresh Mastra agent with the cached system prompt, and gates the conversation on a sign-message + ownership/holding check.
+3. **Moderation** — admins authenticated by `ADMIN_WALLETS` env var hit `/api/admin/regenerate-prompt` or `/api/admin/regenerate-portrait`. Update authority on the asset stays with the server keypair so this works without owner consent.
 
 ---
 
-## Quick Start
+## Roadmap signals
 
-### Prerequisites
-
-- **Node.js** >= 20
-- **pnpm** >= 9
-- An API key for your chosen LLM provider (Anthropic, OpenAI, or Google)
-
-### 1. Clone and install
-
-```bash
-git clone <your-repo-url> my-agent
-cd my-agent
-pnpm install
-```
-
-### 2. Configure environment
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` and fill in the required values:
-
-```dotenv
-AGENT_MODE=public
-LLM_MODEL=anthropic/claude-sonnet-4-5-20250929
-ANTHROPIC_API_KEY=sk-ant-...
-SOLANA_RPC_URL=https://api.devnet.solana.com
-AGENT_KEYPAIR=<base58-encoded secret key or JSON byte array>
-WEB_CHANNEL_TOKEN=<generate with: openssl rand -hex 24>
-```
-
-`AGENT_KEYPAIR` is required in **both** modes — the agent always needs a keypair to sign registration, delegation, and treasury operations. Generate one with:
-
-```bash
-solana-keygen new --no-bip39-passphrase --outfile /dev/stdout
-```
-
-### 3. Run in development
-
-```bash
-pnpm dev
-```
-
-The WebSocket server starts on `ws://localhost:3002` (or the port you configured).
-
-### 4. Test with the built-in UI
-
-The repo includes a lightweight Next.js chat UI for testing without the full metaplex.com frontend:
-
-```bash
-# Set up the UI env (token must match WEB_CHANNEL_TOKEN in .env)
-cp packages/ui/.env.local.example packages/ui/.env.local
-# Edit packages/ui/.env.local with your token
-
-# Run both server and UI together
-pnpm dev:all
-```
-
-Open http://localhost:3001 to chat with the agent, connect a Solana wallet (Phantom/Solflare), and test transaction signing.
-
-You can also connect with any WebSocket client:
-
-```bash
-npx wscat -c 'ws://localhost:3002/?token=YOUR_TOKEN_HERE'
-```
-
-Send a test message:
-
-```json
-{"type":"message","content":"What is my SOL balance?","sender_name":"dev"}
-```
+- **In-app token buy.** Today the chat-side "Buy" links to the Genesis trading UI. Roadmap: in-page swap via `swapBondingCurveV2` so users never leave.
+- **Admin/owner UIs.** API endpoints exist; web pages are next.
+- **Voice mode.** TTS in the character's era-appropriate voice.
+- **Group chat.** Two figures arguing with each other.
 
 ---
 
-## Agent Modes
-
-The template supports two operating modes, controlled by the `AGENT_MODE` environment variable.
-
-Both modes share the same unified identity (keypair + on-chain asset + PDA + optional token). The only difference is how transactions are **routed**: who signs and submits them. See [`docs/SPEC.md`](./docs/SPEC.md) §3 and §4 for the full model.
-
-### Public Mode (multi-user, user-signed txs)
-
-```
-AGENT_MODE=public
-```
-
-End users sign their own transactions in their browser wallet. The agent builds the transaction with the user's wallet as fee payer (via `createNoopSigner`), serializes it, and sends it over the WebSocket. The server prepends a configurable SOL fee (`AGENT_FEE_SOL`) payable to the agent's PDA once the agent is registered.
-
-Each WebSocket connection is its own session (isolated wallet, conversation history, and pending transaction queue), so multiple concurrent users can share a single server instance safely.
-
-**Use cases:** wallet cleanup bots, faucet agents, NFT minting assistants, token launch assistants, portfolio advisors.
-
-**How it works:**
-- `createUmi()` returns a Umi instance seeded with the agent keypair; it still signs server-side operations (registration, Jupiter swaps that go through the agent wallet), but user-facing transactions use a `NoopSigner` placeholder for the connected wallet.
-- `submitOrSend()` builds the transaction, prepends the agent fee, serializes to base64, pushes it through the `TransactionSender`, and **awaits** the user's signature via a correlation-ID-keyed promise (see [`WEBSOCKET_PROTOCOL.md`](./WEBSOCKET_PROTOCOL.md)).
-- The tool returns the real signature (or throws on rejection/timeout).
-
-### Autonomous Mode (agent-signed txs)
-
-```
-AGENT_MODE=autonomous
-AGENT_KEYPAIR=<base58-encoded secret key>
-BOOTSTRAP_WALLET=<base58 pubkey>   # required until the agent registers on-chain
-```
-
-The agent signs and submits transactions directly with its keypair. Only the on-chain asset owner (or `BOOTSTRAP_WALLET` bootstrap fallback) is allowed to interact — non-owner WebSocket connections are rejected at the connection gate before the LLM is ever invoked.
-
-**Use cases:** portfolio rebalancer, trading bot, automated treasury manager, any agent that acts independently.
-
-**How it works:**
-- `createUmi()` decodes `AGENT_KEYPAIR`, creates a signer, and sets it as the Umi identity and fee payer.
-- `submitOrSend()` calls `builder.sendAndConfirm(umi)` and returns the base58 signature.
-
----
-
-## Environment Variables
-
-All variables are loaded from `.env` at the workspace root and validated with Zod at startup. The table below groups them by whether they are required, optional-with-default, or optional-no-default. See [`docs/SPEC.md`](./docs/SPEC.md) §8.1 for the canonical list.
-
-### Required
-
-| Variable | Description |
-|---|---|
-| `AGENT_KEYPAIR` | Base58-encoded secret key (or JSON byte array) for the agent wallet. Required in both modes -- the agent always has a keypair that signs registration, delegation, and treasury operations. |
-| `WEB_CHANNEL_TOKEN` | Shared secret for WebSocket authentication. **Must be at least 32 characters.** Generate with `openssl rand -hex 24` (48 hex chars) or `openssl rand -hex 32` (64 hex chars). |
-| LLM API Key | One of `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `GOOGLE_GENERATIVE_AI_API_KEY`, matching the provider prefix in `LLM_MODEL`. |
-
-### Optional (with defaults)
-
-| Variable | Default | Description |
-|---|---|---|
-| `AGENT_MODE` | `public` | `"public"` or `"autonomous"` |
-| `LLM_MODEL` | `anthropic/claude-sonnet-4-5-20250929` | Mastra model identifier (`provider/model-id`) |
-| `SOLANA_RPC_URL` | `https://api.devnet.solana.com` | Solana JSON-RPC endpoint |
-| `WEB_CHANNEL_PORT` | `3002` | WebSocket server port |
-| `ASSISTANT_NAME` | `Agent` | Display name in chat responses |
-| `AGENT_FEE_SOL` | `0.001` | SOL fee prepended to each user tx (public mode only) |
-| `MAX_STEPS` | `10` | Max LLM + tool steps per user message |
-| `MAX_CONNECTIONS` | `10` | Max concurrent WebSocket sessions |
-| `ENABLE_DEBUG_EVENTS` | `true` | Stream `debug:*` telemetry events |
-| `MAX_SLIPPAGE_BPS` | `500` | Upper cap on `slippageBps` for swap tools |
-| `MAX_PRICE_IMPACT_PCT` | `2.0` | Upper cap on Jupiter `priceImpactPct` |
-| `OWNER_CACHE_TTL_MS` | `300000` | TTL for cached on-chain owner lookups |
-| `WS_ALLOWED_ORIGINS` | `http://localhost:3001,http://localhost:3000` | Comma-separated allowed `Origin` list for WS handshakes (CSWSH protection) |
-| `MAX_MESSAGE_CONTENT` | `8000` | Per-message character cap on inbound chat `content` |
-| `MAX_RPC_TIME_BUDGET_MS` | `60000` | Per-message cumulative RPC wall-clock budget before abort |
-| `LOG_AUTH_FAILURES` | `true` | Emit `console.warn` on token mismatch, origin rejection, autonomous-gate denial, rate-limit breach |
-
-### Optional (no default)
-
-| Variable | Description |
-|---|---|
-| `BOOTSTRAP_WALLET` | Base58 pubkey of the wallet allowed to bootstrap the agent. Required for autonomous mode pre-registration (server refuses to start without it). Once the agent is registered on-chain, the asset owner takes precedence and this value is no longer consulted. |
-| `AGENT_ASSET_ADDRESS` | Operator override for registry address (auto-persisted to `agent-state.json` otherwise) |
-| `AGENT_TOKEN_MINT` | Operator override for token mint (auto-persisted otherwise) |
-| `TOKEN_OVERRIDE` | Target a specific token for buybacks (e.g. MPLX mint) instead of launching |
-| `JUPITER_API_KEY` | Jupiter API key for price data and swap quotes |
-| `AGENT_FUNDING_SOL` | Override SOL amount sent to the agent wallet during `register-agent` funding (default `0.02`) |
-| `AGENT_FUNDING_THRESHOLD_SOL` | Balance threshold that triggers the funding flow (default `0.01`) |
-| `MAX_TOKENS_PER_MESSAGE` | Cumulative LLM token cap per user message across all steps (default `100000`). Exceeding it aborts the turn with `BUDGET_EXCEEDED`. |
-| `MAX_TOOL_EXECUTIONS_PER_MESSAGE` | Maximum tool calls per user message across all steps (default `30`). Exceeding it aborts the turn with `BUDGET_EXCEEDED`. |
-| `PORT` | Fallback for `WEB_CHANNEL_PORT` when the platform (Railway/Render/Fly/Heroku) injects `PORT` instead. |
-
-**LLM_MODEL format:** `<provider>/<model-id>`, using Mastra's model router. Examples:
-
-- `anthropic/claude-sonnet-4-5-20250929`
-- `openai/gpt-4o`
-- `google/gemini-2.5-pro`
-
-Set the corresponding API key environment variable for whichever provider you choose.
-
-### UI Environment (packages/ui/.env.local)
-
-| Variable | Default | Description |
-|---|---|---|
-| `NEXT_PUBLIC_WS_HOST` | `localhost` | WebSocket server host |
-| `NEXT_PUBLIC_WS_PORT` | `3002` (local), `443` (remote) | WebSocket server port. Omitted from the URL when it matches the default port for the selected protocol. |
-| `NEXT_PUBLIC_WS_PROTOCOL` | auto | Force `ws` or `wss`. When unset: `ws` for localhost/127.0.0.1, `wss` otherwise (avoids mixed-content blocking from HTTPS pages). |
-| `NEXT_PUBLIC_WS_TOKEN` | -- | Must match `WEB_CHANNEL_TOKEN` (≥ 32 chars). Passed via the `bearer` subprotocol, not the URL. |
-| `NEXT_PUBLIC_SOLANA_RPC_URL` | `https://api.devnet.solana.com` | Solana RPC for wallet adapter |
-| `NEXT_PUBLIC_SOLANA_CLUSTER` | `devnet` | Cluster used for Solana Explorer links. One of `mainnet-beta`, `devnet`, `testnet`. |
-
----
-
-## Project Structure
-
-```
-metaplex-agent-template/
-  .env.example                  # Environment variable reference (grouped by mode)
-  .dockerignore                 # Docker build-context exclusions
-  .npmrc                        # shamefully-hoist=true (Umi compatibility)
-  agent-state.json              # Auto-generated agent identity (0600, gitignored)
-  Dockerfile                    # Multi-stage server image (Node 20 slim, non-root)
-  package.json                  # Root workspace scripts (dev, build, typecheck, bootstrap)
-  pnpm-workspace.yaml           # pnpm workspace definition (packages/*)
-  railway.json                  # Railway deploy manifest (Dockerfile builder)
-  tsconfig.json                 # Shared TypeScript config (ES2022, strict)
-  WEBSOCKET_PROTOCOL.md         # Full PlexChat protocol specification
-  docs/
-    SPEC.md                     # Product requirements / canonical spec
-    DEPLOYMENT.md               # Per-mode deployment recipes (nginx, Docker, Railway)
-  scripts/
-    bootstrap.ts                # Template pruner -- pnpm bootstrap [public|autonomous]
-
-  packages/
-    core/                       # @metaplex-agent/core
-      src/
-        create-agent.ts         # Factory: returns public or autonomous agent
-        agent-public.ts         # Public-mode Mastra Agent definition
-        agent-autonomous.ts     # Autonomous-mode Mastra Agent definition
-        prompts.ts              # Shared base prompt + mode-specific addendums
-        index.ts                # Package exports
-        tools/
-          index.ts              # Tool registry -- mode-based assignment
-          shared/               # 12 tools available in both modes
-            get-balance.ts        # SOL balance for any address
-            get-token-balances.ts # All SPL holdings for an address
-            get-transaction.ts    # Transaction status lookup
-            get-token-price.ts    # Jupiter USD price for any token
-            get-token-metadata.ts # Token name/symbol/image via DAS
-            sleep.ts              # Pause 1-300 seconds (polling loops)
-            register-agent.ts     # Mint agent asset on the Agent Registry
-            delegate-execution.ts # Set up executive signing authority
-            launch-token.ts       # Launch token via Metaplex Genesis
-            swap-token.ts         # Jupiter DEX swap
-            buyback-token.ts      # Buy the agent's own token (SOL -> token)
-            sell-token.ts         # Sell the agent's own token (token -> SOL)
-          public/               # 2 tools only for public mode
-            transfer-sol.ts       # Transfer SOL from user wallet
-            transfer-token.ts     # Transfer SPL tokens from user wallet
-
-    server/                     # @metaplex-agent/server
-      src/
-        index.ts                # Entry point -- creates and starts the server
-        websocket.ts            # PlexChatServer class (auth, routing, streaming)
-        session.ts              # Per-connection Session (state, send, cleanup)
-
-    shared/                     # @metaplex-agent/shared
-      src/
-        config.ts               # Zod-validated env config loader + AGENT_KEYPAIR decoder
-        umi.ts                  # createUmi() -- Umi factory with keypair identity
-        transaction.ts          # submitOrSend() -- mode-aware tx routing + fee prepend
-        funding.ts              # ensureAgentFunded() -- mode-aware top-up seam
-        execute.ts              # executeAsAgent() + getAgentPda() (MPL Core Execute CPI)
-        auth.ts                 # Owner resolution, auth policy, withAuth wrapper
-        context.ts              # readAgentContext() -- shared AgentContext extractor
-        error-codes.ts          # toToolError() classifier + ToolErrorCodes
-        server-limits.ts        # getServerLimits() -- funding + per-message budgets
-        jupiter.ts              # Quote/swap/price helpers + simulateAndVerifySwap
-        state.ts                # agent-state.json atomic read/write
-        index.ts                # Barrel exports
-        types/
-          protocol.ts           # PlexChat WebSocket message type definitions
-          agent.ts              # AgentContext and TransactionSender interfaces
-          tool-result.ts        # ToolResult<T> + ok()/info()/err() helpers
-
-    ui/                         # @metaplex-agent/ui
-      src/
-        app/
-          page.tsx              # Main page -- chat + wallet + transaction approval
-          providers.tsx         # Solana wallet adapter context providers
-          env.ts                # Client-side WebSocket URL builder
-        hooks/
-          use-plexchat.ts       # WebSocket hook (connect, messages, typing, reconnect)
-          use-debug-panel.ts    # Debug telemetry tracking
-        components/
-          chat-panel.tsx        # Scrollable message list + input
-          chat-message.tsx      # Single message bubble
-          typing-indicator.tsx  # Animated typing dots
-          transaction-approval.tsx  # Sign + send transaction overlay
-          debug/                    # Debug panel (Steps, Context, Messages, Totals)
-```
-
----
-
-## Adding New Tools
-
-Tools live under `packages/core/src/tools/` in one of two subdirectories:
-
-- **`shared/`** -- available in both public and autonomous modes (12 tools ship in this directory)
-- **`public/`** -- only registered in public mode (`transfer-sol`, `transfer-token`)
-
-Pick the one that matches your tool's scope.
-
-### 1. Create the tool file
-
-Here is an example read-only tool placed in `shared/`:
-
-```typescript
-// packages/core/src/tools/shared/get-account-info.ts
-
-import { createTool } from '@mastra/core/tools';
-import { z } from 'zod';
-import { publicKey } from '@metaplex-foundation/umi';
-import { createUmi } from '@metaplex-agent/shared';
-
-export const getAccountInfo = createTool({
-  id: 'get-account-info',
-  description: 'Get basic account info for a Solana address.',
-  inputSchema: z.object({
-    address: z.string().describe('Solana wallet address'),
-  }),
-  outputSchema: z.object({
-    address: z.string(),
-    exists: z.boolean(),
-    lamports: z.string().optional(),
-    owner: z.string().optional(),
-  }),
-  execute: async ({ address }) => {
-    const umi = createUmi();
-    const account = await umi.rpc.getAccount(publicKey(address));
-
-    if (!account.exists) {
-      return { address, exists: false };
-    }
-
-    return {
-      address,
-      exists: true,
-      lamports: account.lamports.basisPoints.toString(),
-      owner: account.owner.toString(),
-    };
-  },
-});
-```
-
-### 2. Register the tool
-
-Add the import and entry to `packages/core/src/tools/shared/index.ts` (or `public/index.ts` for public-only tools):
-
-```typescript
-// packages/core/src/tools/shared/index.ts
-import { getBalance } from './get-balance.js';
-import { getTokenBalances } from './get-token-balances.js';
-import { getTransaction } from './get-transaction.js';
-// ...existing imports...
-import { getAccountInfo } from './get-account-info.js';  // <-- add import
-
-export const sharedTools = {
-  getBalance,
-  getTokenBalances,
-  getTransaction,
-  // ...existing tools...
-  getAccountInfo,  // <-- add to registry
-};
-```
-
-That is all that is needed. Mastra automatically exposes registered tools to the LLM. The top-level `tools/index.ts` composes `sharedTools` + `publicTools` (public mode) or just `sharedTools` (autonomous mode).
-
-### 3. Tools that write transactions
-
-For tools that build and submit transactions, use the `submitOrSend` helper from `@metaplex-agent/shared`. This function handles both agent modes automatically:
-
-- **Public mode:** serializes the transaction to base64, pushes it to the connected client, and **awaits** the user's signature. Returns the confirmed signature (or throws on rejection/timeout).
-- **Autonomous mode:** signs with the agent keypair and submits directly to the network. Returns the signature.
-
-Either way, `submitOrSend` returns a real `Promise<string>` resolving to the base58 signature -- there is no longer a `'sent-to-wallet'` pending state to branch on.
-
-See `packages/core/src/tools/public/transfer-sol.ts` for the full pattern. The key parts:
-
-```typescript
-import { submitOrSend, createUmi, readAgentContext, ok, err } from '@metaplex-agent/shared';
-
-// Inside your tool's execute function:
-execute: async ({ destination, amount }, { requestContext }) => {
-  // Extract the full AgentContext from RequestContext (handles defaults for you).
-  const context = readAgentContext(requestContext);
-
-  const umi = createUmi();
-
-  // Build the transaction using Umi / mpl-toolbox
-  const builder = transferSolIx(umi, { /* ... */ });
-
-  try {
-    // Submit or send -- handles both modes, returns the signature
-    const signature = await submitOrSend(umi, builder, context, {
-      message: `Transfer ${amount} SOL to ${destination}`,
-    });
-
-    // Use the ok()/info()/err() helpers from @metaplex-agent/shared for a
-    // consistent ToolResult<T> shape the LLM can branch on (`status` field).
-    return ok({ signature, message: `Done. Signature: ${signature}` });
-  } catch (e) {
-    return err('GENERIC', e instanceof Error ? e.message : String(e));
-  }
-};
-```
-
-See [`docs/SPEC.md`](./docs/SPEC.md) Appendix B for the canonical `AgentContext` shape and §5.2 for the `ToolResult<T>` convention.
-
----
-
-## Customizing the Agent
-
-### Changing the system prompt
-
-The system prompt lives in `packages/core/src/prompts.ts`. It exports a shared base prompt plus a per-mode addendum, composed at agent creation time via `buildSystemPrompt(mode)`. Edit the base constant to change the agent's personality or domain focus:
-
-```typescript
-// packages/core/src/prompts.ts
-export const BASE_SYSTEM_PROMPT = `You are a DeFi portfolio assistant on Solana.
-You help users track their holdings, suggest rebalancing strategies,
-and execute swaps when asked. Always explain risks before executing trades.`;
-```
-
-Update the mode addendums (also in `prompts.ts`) when you want public- or autonomous-specific guidance.
-
-### Switching LLM providers
-
-Change `LLM_MODEL` in your `.env` file and set the matching API key:
-
-```dotenv
-# Switch to OpenAI
-LLM_MODEL=openai/gpt-4o
-OPENAI_API_KEY=sk-...
-
-# Or switch to Google
-LLM_MODEL=google/gemini-2.5-pro
-GOOGLE_GENERATIVE_AI_API_KEY=...
-```
-
-No code changes are needed. The `createAgent()` function reads `LLM_MODEL` from the config and passes it directly to Mastra's `Agent` constructor, which routes to the correct provider.
-
-### Changing the agent name
-
-Set `ASSISTANT_NAME` in your `.env` file. This controls the `sender` field in chat responses:
-
-```dotenv
-ASSISTANT_NAME=SolBot
-```
-
----
-
-## PlexChat Protocol
-
-The WebSocket server implements the **PlexChat** protocol for bidirectional communication between frontends and the agent.
-
-### Client-to-server messages
-
-| Type | Purpose |
-|---|---|
-| `message` | Send a chat message to the agent |
-| `wallet_connect` | Notify the server of a connected Solana wallet address |
-| `wallet_disconnect` | Clear the connected wallet |
-| `tx_result` | Report a signed and submitted transaction (requires `correlationId` + `signature`) |
-| `tx_error` | Report a rejected or failed transaction (requires `correlationId`, optional `reason`) |
-
-### Server-to-client messages
-
-All server-to-client messages are unicast to the originating session — no cross-session broadcast.
-
-| Type | Purpose |
-|---|---|
-| `connected` | Sent on successful WebSocket connection |
-| `message` | Agent chat response |
-| `typing` | Typing indicator on/off |
-| `transaction` | Serialized Solana transaction for wallet signing (includes `correlationId`; includes `feeSol` in public mode when a fee is prepended) |
-| `wallet_connected` | Wallet connection confirmed |
-| `wallet_disconnected` | Wallet disconnection confirmed |
-| `error` | Error response |
-
-### Authentication
-
-Connections require a token via query parameter (`?token=...`) or `Authorization: Bearer ...` header. Unauthorized connections are closed with code `4001`.
-
-For the complete protocol specification including message schemas, multi-transaction flows, state management, and example code, see [WEBSOCKET_PROTOCOL.md](./WEBSOCKET_PROTOCOL.md).
-
----
-
-## Development
-
-All commands are run from the workspace root.
-
-| Command | Description |
-|---|---|
-| `pnpm dev` | Build deps then start the server in watch mode |
-| `pnpm dev:ui` | Start the test UI on http://localhost:3001 |
-| `pnpm dev:all` | Build deps then start both server and test UI |
-| `pnpm build` | Build all packages (`tsc` in each workspace) |
-| `pnpm typecheck` | Run TypeScript type checking across all packages (no emit) |
-| `pnpm clean` | Remove `dist/` / `.next/` directories from all packages |
-
-The `dev` command builds `shared` and `core` first, then uses `tsx watch` to run `packages/server/src/index.ts` with hot reload. Changes to any package source file will trigger a restart.
-
-### Building for production
-
-```bash
-pnpm build
-pnpm --filter @metaplex-agent/server start
-```
-
-This compiles TypeScript to JavaScript in each package's `dist/` folder, then starts the server from the compiled output.
-
----
-
-## Deployment Notes
-
-The repo ships three deploy artifacts out of the box:
-
-- **`Dockerfile`** — multi-stage Node 20 slim image. Installs with pnpm, builds `shared → core → server`, and runs as non-root user `agent` on port 3002. UI is excluded from the server image via `.dockerignore` (the UI is designed to deploy separately, e.g. on Vercel).
-- **`railway.json`** — Railway config pointing at the Dockerfile. Railway injects `PORT`; `config.ts` falls back to it when `WEB_CHANNEL_PORT` is not set, so no extra wiring is needed.
-- **`.dockerignore`** — keeps `.env`, `agent-state.json`, `node_modules`, local builds, docs, and the UI source out of the build context.
-
-For end-to-end recipes per mode (nginx examples, hardening checklists, Docker tuning, Kubernetes manifests) see [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md). A step-by-step **Railway** deploy lives in that file too — it's the fastest path from `git push` to a running public-mode agent.
-
-### Use WSS in production
-
-The WebSocket server runs unencrypted (`ws://`) by default. In production, terminate TLS at a reverse proxy:
-
-```nginx
-# nginx example
-location /ws {
-    proxy_pass http://127.0.0.1:3002;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
-}
-```
-
-### Authentication
-
-The current auth model is a single shared token (`WEB_CHANNEL_TOKEN`, minimum 32 chars). For production:
-
-- **Prefer subprotocol or Authorization-header auth** over the query param. Browser clients should open the WebSocket with `new WebSocket(url, ['bearer', token])` so the token travels in the handshake and never appears in reverse-proxy access logs, browser history, or Referer headers. See [`WEBSOCKET_PROTOCOL.md`](./WEBSOCKET_PROTOCOL.md) § Authentication.
-- **Terminate TLS** (`wss://`) at a reverse proxy -- the handshake, including the subprotocol header, is only encrypted on the wire if the transport is encrypted.
-- **Use tokens ≥ 32 characters** (preferably a per-user JWT or session cookie tied to your app's auth system, not a single shared secret for all clients).
-- **Constrain `WS_ALLOWED_ORIGINS`** to exactly the origins allowed to open a WebSocket. Cross-site requests are rejected during the handshake.
-- The server applies per-session rate limits internally; put an application-layer gateway (Cloudflare, nginx limits, etc.) in front to also cap handshake attempts by IP.
-
-### RPC endpoint
-
-The default `https://api.devnet.solana.com` is rate-limited and intended for development only. For production:
-- Use a dedicated RPC provider (Helius, QuickNode, Triton, etc.)
-- Set `SOLANA_RPC_URL` to your provider's endpoint
-- Switch to mainnet-beta when ready
-
-### Agent keypair security (autonomous mode)
-
-If running in autonomous mode, the `AGENT_KEYPAIR` environment variable contains a secret key with direct access to funds. Store it securely:
-- Use a secrets manager (AWS Secrets Manager, Vault, etc.)
-- Never commit it to version control
-- Restrict file permissions on `.env` in production
-- Fund the agent wallet with only what it needs
+## Built on
+
+- [Metaplex Core](https://developers.metaplex.com/core) — the NFT standard.
+- [Metaplex Agent Registry](https://www.metaplex.com/docs/agents/register-agent) — identity layer for AI agents.
+- [Metaplex Genesis](https://www.metaplex.com/docs/smart-contracts/genesis) — token launches with native creator-fee routing.
+- [Mastra](https://mastra.ai) — TypeScript agent framework.
+- [Umi](https://github.com/metaplex-foundation/umi) — Solana toolkit.
+- [Irys](https://irys.xyz) — permanent storage for prompts and portraits.
+- [Anthropic](https://www.anthropic.com) and/or [OpenAI](https://platform.openai.com) — LLMs.
 
 ---
 
 ## License
 
-See [LICENSE](./LICENSE) for details.
+Apache-2.0. See [LICENSE](./LICENSE) if present, otherwise the upstream Metaplex Agent Template license applies.
