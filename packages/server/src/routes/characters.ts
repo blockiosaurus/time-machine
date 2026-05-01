@@ -1,7 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { characters } from '../db/schema.js';
+import { currentNetwork } from '../services/network.js';
 import { sendJson, sendError } from './http-utils.js';
 
 function rowToPublic(row: typeof characters.$inferSelect) {
@@ -16,37 +17,40 @@ function rowToPublic(row: typeof characters.$inferSelect) {
     genesisTokenMint: row.genesisTokenMint,
     genesisTicker: row.genesisTicker,
     ownerWallet: row.ownerWallet,
+    network: row.network,
     createdAt: row.createdAt.toISOString(),
     status: row.status,
   };
 }
 
-/** GET /api/characters — list active characters. */
+/** GET /api/characters — list active characters on the current network. */
 export async function handleListCharacters(
   _req: IncomingMessage,
   res: ServerResponse,
   db: Db,
 ): Promise<void> {
+  const network = currentNetwork();
   const rows = await db
     .select()
     .from(characters)
-    .where(eq(characters.status, 'active'))
+    .where(and(eq(characters.network, network), eq(characters.status, 'active')))
     .orderBy(desc(characters.createdAt))
     .limit(200);
   sendJson(res, 200, { characters: rows.map(rowToPublic) });
 }
 
-/** GET /api/characters/:slug — single character lookup. */
+/** GET /api/characters/:slug — single character lookup, current network only. */
 export async function handleGetCharacterBySlug(
   _req: IncomingMessage,
   res: ServerResponse,
   db: Db,
   slug: string,
 ): Promise<void> {
+  const network = currentNetwork();
   const rows = await db
     .select()
     .from(characters)
-    .where(eq(characters.slug, slug))
+    .where(and(eq(characters.network, network), eq(characters.slug, slug)))
     .limit(1);
   const row = rows[0];
   if (!row) {

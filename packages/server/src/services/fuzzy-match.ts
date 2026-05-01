@@ -1,4 +1,5 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
+import type { SolanaNetwork } from '@metaplex-agent/shared';
 import type { Db } from '../db/index.js';
 import { characters } from '../db/schema.js';
 import { normalizeName, tokenize } from './normalize.js';
@@ -74,11 +75,12 @@ function levenshtein(a: string, b: string): number {
 export async function fuzzyMatchCheck(
   db: Db,
   candidateCanonicalName: string,
+  network: SolanaNetwork,
 ): Promise<FuzzyMatchHit | null> {
   const normalized = normalizeName(candidateCanonicalName);
   const candidateTokens = tokenize(candidateCanonicalName);
 
-  // 1. Exact match.
+  // 1. Exact match — scoped to the current network.
   const exactRows = await db
     .select({
       id: characters.id,
@@ -87,7 +89,12 @@ export async function fuzzyMatchCheck(
       normalizedName: characters.normalizedName,
     })
     .from(characters)
-    .where(eq(characters.normalizedName, normalized))
+    .where(
+      and(
+        eq(characters.network, network),
+        eq(characters.normalizedName, normalized),
+      ),
+    )
     .limit(1);
   if (exactRows[0]) {
     return {
@@ -99,8 +106,8 @@ export async function fuzzyMatchCheck(
     };
   }
 
-  // For 2-4, scan the character table. At low cardinality this is fine; at
-  // 100k+ rows we'd want a trigram index or a separate Postgres pg_trgm pass.
+  // For 2-4, scan the character table for this network only. At low
+  // cardinality this is fine; at 100k+ rows we'd want a trigram index.
   const allRows = await db
     .select({
       id: characters.id,
@@ -109,7 +116,8 @@ export async function fuzzyMatchCheck(
       normalizedName: characters.normalizedName,
       aliases: characters.aliases,
     })
-    .from(characters);
+    .from(characters)
+    .where(eq(characters.network, network));
 
   // 4. Alias dictionary check (cheap, do first to short-circuit).
   const candidateLower = candidateCanonicalName.trim().toLowerCase();

@@ -5,9 +5,11 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE IF NOT EXISTS characters (
   id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  slug                  text UNIQUE NOT NULL,
-  canonical_name        text UNIQUE NOT NULL,
-  normalized_name       text UNIQUE NOT NULL,
+  network               text NOT NULL DEFAULT 'devnet'
+    CHECK (network IN ('mainnet', 'devnet', 'testnet')),
+  slug                  text NOT NULL,
+  canonical_name        text NOT NULL,
+  normalized_name       text NOT NULL,
   aliases               text[] NOT NULL DEFAULT '{}',
   bio_summary           text NOT NULL,
   birth_year            int,
@@ -16,18 +18,27 @@ CREATE TABLE IF NOT EXISTS characters (
   prompt_ipfs_cid       text NOT NULL,
   portrait_ipfs_cid     text NOT NULL,
   registration_ipfs_cid text NOT NULL,
-  nft_mint              text NOT NULL UNIQUE,
+  nft_mint              text NOT NULL,
   agent_registry_id     text NOT NULL,
-  genesis_token_mint    text NOT NULL UNIQUE,
-  genesis_ticker        text NOT NULL UNIQUE,
+  genesis_token_mint    text NOT NULL,
+  genesis_ticker        text NOT NULL,
   owner_wallet          text NOT NULL,
   created_at            timestamptz NOT NULL DEFAULT now(),
   status                text NOT NULL DEFAULT 'active'
-    CHECK (status IN ('active', 'flagged', 'disabled', 'regenerating'))
+    CHECK (status IN ('active', 'flagged', 'disabled', 'regenerating')),
+  -- Uniqueness is scoped per-network so a character minted on devnet
+  -- doesn't block the same character from being minted on mainnet.
+  UNIQUE (network, slug),
+  UNIQUE (network, canonical_name),
+  UNIQUE (network, normalized_name),
+  UNIQUE (network, nft_mint),
+  UNIQUE (network, genesis_token_mint),
+  UNIQUE (network, genesis_ticker)
 );
 
-CREATE INDEX IF NOT EXISTS idx_characters_normalized ON characters(normalized_name);
-CREATE INDEX IF NOT EXISTS idx_characters_status ON characters(status);
+-- Network-scoped indexes are created in the migration block at the bottom
+-- of this file (after ALTER TABLE ADD COLUMN, so existing tables have the
+-- column before the index references it).
 CREATE INDEX IF NOT EXISTS idx_characters_owner ON characters(owner_wallet);
 
 CREATE TABLE IF NOT EXISTS chat_sessions (
@@ -56,6 +67,8 @@ CREATE INDEX IF NOT EXISTS idx_messages_session_created
 
 CREATE TABLE IF NOT EXISTS mint_jobs (
   id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  network        text NOT NULL DEFAULT 'devnet'
+    CHECK (network IN ('mainnet', 'devnet', 'testnet')),
   requested_name text NOT NULL,
   canonical_name text,
   wallet         text NOT NULL,
@@ -81,6 +94,8 @@ CREATE INDEX IF NOT EXISTS idx_mint_jobs_status ON mint_jobs(status);
 ALTER TABLE mint_jobs ADD COLUMN IF NOT EXISTS portrait_bytes bytea;
 ALTER TABLE mint_jobs ADD COLUMN IF NOT EXISTS prompt_text    text;
 ALTER TABLE mint_jobs ADD COLUMN IF NOT EXISTS fee_signature  text;
+ALTER TABLE mint_jobs ADD COLUMN IF NOT EXISTS network        text NOT NULL DEFAULT 'devnet';
+ALTER TABLE characters ADD COLUMN IF NOT EXISTS network       text NOT NULL DEFAULT 'devnet';
 
 -- Refresh the status CHECK constraint to include the new awaiting_fee /
 -- fee_paid states. CREATE TABLE IF NOT EXISTS leaves the original
@@ -90,6 +105,42 @@ ALTER TABLE mint_jobs ADD CONSTRAINT mint_jobs_status_check
   CHECK (status IN ('pending','canonicalizing','fuzzy_match_failed',
                     'generating','awaiting_fee','fee_paid',
                     'awaiting_sig','on_chain','failed'));
+
+-- Add the network CHECK constraint idempotently for both tables.
+ALTER TABLE mint_jobs DROP CONSTRAINT IF EXISTS mint_jobs_network_check;
+ALTER TABLE mint_jobs ADD CONSTRAINT mint_jobs_network_check
+  CHECK (network IN ('mainnet', 'devnet', 'testnet'));
+ALTER TABLE characters DROP CONSTRAINT IF EXISTS characters_network_check;
+ALTER TABLE characters ADD CONSTRAINT characters_network_check
+  CHECK (network IN ('mainnet', 'devnet', 'testnet'));
+
+-- Migrate `characters` uniqueness from (col) to (network, col). Drop the
+-- old single-column unique constraints if present, then add composites.
+ALTER TABLE characters DROP CONSTRAINT IF EXISTS characters_slug_key;
+ALTER TABLE characters DROP CONSTRAINT IF EXISTS characters_canonical_name_key;
+ALTER TABLE characters DROP CONSTRAINT IF EXISTS characters_normalized_name_key;
+ALTER TABLE characters DROP CONSTRAINT IF EXISTS characters_nft_mint_key;
+ALTER TABLE characters DROP CONSTRAINT IF EXISTS characters_genesis_token_mint_key;
+ALTER TABLE characters DROP CONSTRAINT IF EXISTS characters_genesis_ticker_key;
+
+ALTER TABLE characters DROP CONSTRAINT IF EXISTS characters_network_slug_key;
+ALTER TABLE characters ADD CONSTRAINT characters_network_slug_key UNIQUE (network, slug);
+ALTER TABLE characters DROP CONSTRAINT IF EXISTS characters_network_canonical_name_key;
+ALTER TABLE characters ADD CONSTRAINT characters_network_canonical_name_key UNIQUE (network, canonical_name);
+ALTER TABLE characters DROP CONSTRAINT IF EXISTS characters_network_normalized_name_key;
+ALTER TABLE characters ADD CONSTRAINT characters_network_normalized_name_key UNIQUE (network, normalized_name);
+ALTER TABLE characters DROP CONSTRAINT IF EXISTS characters_network_nft_mint_key;
+ALTER TABLE characters ADD CONSTRAINT characters_network_nft_mint_key UNIQUE (network, nft_mint);
+ALTER TABLE characters DROP CONSTRAINT IF EXISTS characters_network_genesis_token_mint_key;
+ALTER TABLE characters ADD CONSTRAINT characters_network_genesis_token_mint_key UNIQUE (network, genesis_token_mint);
+ALTER TABLE characters DROP CONSTRAINT IF EXISTS characters_network_genesis_ticker_key;
+ALTER TABLE characters ADD CONSTRAINT characters_network_genesis_ticker_key UNIQUE (network, genesis_ticker);
+
+-- Replace single-column lookup indexes with network-scoped composites.
+DROP INDEX IF EXISTS idx_characters_normalized;
+DROP INDEX IF EXISTS idx_characters_status;
+CREATE INDEX IF NOT EXISTS idx_characters_network_normalized ON characters(network, normalized_name);
+CREATE INDEX IF NOT EXISTS idx_characters_network_status ON characters(network, status);
 
 CREATE TABLE IF NOT EXISTS moderation_tickets (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),

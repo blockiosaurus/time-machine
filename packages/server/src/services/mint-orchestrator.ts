@@ -9,6 +9,7 @@ import { generateSystemPrompt } from './prompt-generator.js';
 import { generatePortrait } from './image-generator.js';
 import { moderatePrompt } from './moderation.js';
 import { slugify } from './normalize.js';
+import { currentNetwork } from './network.js';
 
 export interface PreviewArgs {
   mintJobId: string;
@@ -70,9 +71,11 @@ export async function startMintCanonicalize(
         existingSlug?: string;
       };
 }> {
+  const network = currentNetwork();
   const inserted = await db
     .insert(mintJobs)
     .values({
+      network,
       requestedName: rawName,
       wallet,
       status: 'canonicalizing',
@@ -113,7 +116,7 @@ export async function startMintCanonicalize(
   }
 
   await setStep(db, jobId, 'fuzzy_match', 'running');
-  const hit = await fuzzyMatchCheck(db, canon.canonicalName);
+  const hit = await fuzzyMatchCheck(db, canon.canonicalName, network);
   await setStep(db, jobId, 'fuzzy_match', hit ? 'failed' : 'done');
 
   if (hit) {

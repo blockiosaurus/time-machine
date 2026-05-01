@@ -21,9 +21,10 @@ export const characters = pgTable(
   'characters',
   {
     id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
-    slug: text('slug').notNull().unique(),
-    canonicalName: text('canonical_name').notNull().unique(),
-    normalizedName: text('normalized_name').notNull().unique(),
+    network: text('network').notNull().default('devnet'),
+    slug: text('slug').notNull(),
+    canonicalName: text('canonical_name').notNull(),
+    normalizedName: text('normalized_name').notNull(),
     aliases: text('aliases').array().notNull().default(sql`'{}'::text[]`),
     bioSummary: text('bio_summary').notNull(),
     birthYear: integer('birth_year'),
@@ -32,10 +33,10 @@ export const characters = pgTable(
     promptIpfsCid: text('prompt_ipfs_cid').notNull(),
     portraitIpfsCid: text('portrait_ipfs_cid').notNull(),
     registrationIpfsCid: text('registration_ipfs_cid').notNull(),
-    nftMint: text('nft_mint').notNull().unique(),
+    nftMint: text('nft_mint').notNull(),
     agentRegistryId: text('agent_registry_id').notNull(),
-    genesisTokenMint: text('genesis_token_mint').notNull().unique(),
-    genesisTicker: text('genesis_ticker').notNull().unique(),
+    genesisTokenMint: text('genesis_token_mint').notNull(),
+    genesisTicker: text('genesis_ticker').notNull(),
     ownerWallet: text('owner_wallet').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
@@ -43,8 +44,14 @@ export const characters = pgTable(
     status: text('status').notNull().default('active'),
   },
   (t) => ({
-    normalizedIdx: index('idx_characters_normalized').on(t.normalizedName),
-    statusIdx: index('idx_characters_status').on(t.status),
+    networkSlug: unique('characters_network_slug_key').on(t.network, t.slug),
+    networkCanonical: unique('characters_network_canonical_name_key').on(t.network, t.canonicalName),
+    networkNormalized: unique('characters_network_normalized_name_key').on(t.network, t.normalizedName),
+    networkNft: unique('characters_network_nft_mint_key').on(t.network, t.nftMint),
+    networkGenesisToken: unique('characters_network_genesis_token_mint_key').on(t.network, t.genesisTokenMint),
+    networkGenesisTicker: unique('characters_network_genesis_ticker_key').on(t.network, t.genesisTicker),
+    normalizedIdx: index('idx_characters_network_normalized').on(t.network, t.normalizedName),
+    statusIdx: index('idx_characters_network_status').on(t.network, t.status),
     ownerIdx: index('idx_characters_owner').on(t.ownerWallet),
   })
 );
@@ -92,6 +99,7 @@ export const mintJobs = pgTable(
   'mint_jobs',
   {
     id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+    network: text('network').notNull().default('devnet'),
     requestedName: text('requested_name').notNull(),
     canonicalName: text('canonical_name'),
     wallet: text('wallet').notNull(),

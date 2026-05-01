@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import {
   base64,
   generateSigner,
@@ -27,6 +27,7 @@ import type { Db } from '../db/index.js';
 import { characters, mintJobs } from '../db/schema.js';
 import { slugify } from './normalize.js';
 import { pinJson, pinBytes } from './irys.js';
+import { currentNetwork } from './network.js';
 
 interface PreviewState {
   canonicalName: string;
@@ -443,11 +444,14 @@ export async function confirmMint(
     await waitForSignature(sig);
   }
 
-  // Idempotency guard.
+  // Idempotency guard, scoped to the current network so devnet+mainnet
+  // assets at the same address (impossible in practice, but cheap to be
+  // safe) wouldn't collide.
+  const network = currentNetwork();
   const existing = await db
     .select()
     .from(characters)
-    .where(eq(characters.nftMint, assetAddr))
+    .where(and(eq(characters.network, network), eq(characters.nftMint, assetAddr)))
     .limit(1);
   if (existing[0]) {
     return {
@@ -473,6 +477,7 @@ export async function confirmMint(
     .replace(/[^a-z0-9]+/g, '');
 
   await db.insert(characters).values({
+    network,
     slug,
     canonicalName: preview.canonicalName,
     normalizedName,

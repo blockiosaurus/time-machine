@@ -27,8 +27,9 @@ import { RequestContext } from '@mastra/core/request-context';
 import { Session, type SimpleRateLimiter } from './session.js';
 import { getDb } from './db/index.js';
 import { characters as charactersTable, chatSessions, messages as messagesTable } from './db/schema.js';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { hashIp, checkRateLimit } from './services/rate-limit.js';
+import { currentNetwork } from './services/network.js';
 import { randomBytes } from 'node:crypto';
 
 // Split regexes for different base58 contexts
@@ -442,7 +443,7 @@ export class PlexChatServer {
     const rows = await db
       .select()
       .from(charactersTable)
-      .where(eq(charactersTable.slug, slug))
+      .where(and(eq(charactersTable.network, currentNetwork()), eq(charactersTable.slug, slug)))
       .limit(1);
     const row = rows[0];
     if (!row) throw new Error(`Character "${slug}" not found`);

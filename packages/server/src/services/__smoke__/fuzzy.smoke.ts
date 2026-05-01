@@ -10,14 +10,17 @@ interface FakeRow {
   canonicalName: string;
   normalizedName: string;
   aliases: string[];
+  network: string;
 }
 
 function buildFakeDb(rows: FakeRow[]): Db {
   // We mimic just the chained .select/.from/.where/.limit/.then shape that
-  // fuzzy-match.ts uses. Drizzle returns a thenable Builder; here we return
-  // arrays directly. The check uses two query shapes:
-  //   - exact:  select(...).from(characters).where(eq(...)).limit(1) -> [row]
-  //   - all:    select(...).from(characters)                          -> [rows]
+  // fuzzy-match.ts uses. The query now compounds network + normalizedName
+  // via `and(eq(network), eq(normalizedName))`; we treat the .where() as an
+  // opaque predicate and just match on `normalizedName`-shaped values that
+  // we find in the predicate's query chunks. Network filtering is folded
+  // into the implicit "rows belong to one network" assumption — we only
+  // seed devnet rows.
   let pendingFilter: ((r: FakeRow) => boolean) | null = null;
   let pendingLimit: number | null = null;
 
@@ -31,14 +34,22 @@ function buildFakeDb(rows: FakeRow[]): Db {
       return builder;
     },
     where(predicate: any) {
-      // We assume predicate is `eq(characters.normalizedName, x)` — pull the
-      // expected normalized name out via toString() heuristic.
-      const s = predicate?.queryChunks
-        ? predicate.queryChunks.map((c: any) => c.value).join('')
-        : String(predicate);
-      const m = /["']([a-z0-9]+)["']/.exec(s) ?? /([a-z0-9]+)$/.exec(s);
-      const want = m?.[1];
-      pendingFilter = (r: FakeRow) => r.normalizedName === want;
+      // Find every quoted/string-literal value in the predicate; the
+      // longest one is the normalized-name candidate (network values are
+      // short like "devnet").
+      const chunks: string[] = [];
+      function walk(node: any) {
+        if (!node) return;
+        if (typeof node === 'string') chunks.push(node);
+        if (Array.isArray(node?.queryChunks)) node.queryChunks.forEach(walk);
+        if (node?.value !== undefined) chunks.push(String(node.value));
+      }
+      walk(predicate);
+      const candidates = chunks
+        .map((c) => /([a-z0-9]+)/.exec(c)?.[1])
+        .filter((s): s is string => !!s && s !== 'devnet' && s !== 'mainnet' && s !== 'testnet');
+      const want = candidates.sort((a, b) => b.length - a.length)[0];
+      pendingFilter = (r: FakeRow) => !want || r.normalizedName === want;
       return builder;
     },
     limit(n: number) {
@@ -62,6 +73,7 @@ const seed: FakeRow[] = [
     canonicalName: 'Albert Einstein',
     normalizedName: 'alberteinstein',
     aliases: ['Einstein', 'A. Einstein'],
+    network: 'devnet',
   },
   {
     id: 'lincoln-id',
@@ -69,6 +81,7 @@ const seed: FakeRow[] = [
     canonicalName: 'Abraham Lincoln',
     normalizedName: 'abrahamlincoln',
     aliases: [],
+    network: 'devnet',
   },
 ];
 
@@ -81,21 +94,21 @@ const cases: Case[] = [
   {
     name: 'exact normalized match rejects',
     fn: async () => {
-      const hit = await fuzzyMatchCheck(buildFakeDb(seed), 'Albert Einstein');
+      const hit = await fuzzyMatchCheck(buildFakeDb(seed), 'Albert Einstein', 'devnet');
       return hit?.matchedOn === 'exact';
     },
   },
   {
     name: 'token-reorder caught by token_set Jaccard',
     fn: async () => {
-      const hit = await fuzzyMatchCheck(buildFakeDb(seed), 'Einstein Albert');
+      const hit = await fuzzyMatchCheck(buildFakeDb(seed), 'Einstein Albert', 'devnet');
       return hit?.matchedOn === 'token_set';
     },
   },
   {
     name: 'minor typo caught by levenshtein',
     fn: async () => {
-      const hit = await fuzzyMatchCheck(buildFakeDb(seed), 'Albert Einstien');
+      const hit = await fuzzyMatchCheck(buildFakeDb(seed), 'Albert Einstien', 'devnet');
       // 'alberteinstien' vs 'alberteinstein' — distance 2.
       return hit?.matchedOn === 'levenshtein' || hit?.matchedOn === 'token_set';
     },
@@ -103,14 +116,14 @@ const cases: Case[] = [
   {
     name: 'alias substring match rejects',
     fn: async () => {
-      const hit = await fuzzyMatchCheck(buildFakeDb(seed), 'A. Einstein');
+      const hit = await fuzzyMatchCheck(buildFakeDb(seed), 'A. Einstein', 'devnet');
       return hit?.matchedOn === 'alias';
     },
   },
   {
     name: 'unrelated name passes',
     fn: async () => {
-      const hit = await fuzzyMatchCheck(buildFakeDb(seed), 'Marie Curie');
+      const hit = await fuzzyMatchCheck(buildFakeDb(seed), 'Marie Curie', 'devnet');
       return hit === null;
     },
   },

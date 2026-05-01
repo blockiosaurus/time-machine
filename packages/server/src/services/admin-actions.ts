@@ -1,8 +1,4 @@
-import { eq } from 'drizzle-orm';
-import {
-  buildAgentRegistrationDoc,
-  type CharacterRow,
-} from '@metaplex-agent/shared';
+import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { characters as charactersTable, moderationTickets } from '../db/schema.js';
 import { canonicalize } from './canonicalizer.js';
@@ -10,6 +6,7 @@ import { generateSystemPrompt } from './prompt-generator.js';
 import { generatePortrait } from './image-generator.js';
 import { moderatePrompt } from './moderation.js';
 import { pinJson, pinBytes } from './irys.js';
+import { currentNetwork } from './network.js';
 
 export async function regeneratePromptForCharacter(
   db: Db,
@@ -18,7 +15,7 @@ export async function regeneratePromptForCharacter(
   const rows = await db
     .select()
     .from(charactersTable)
-    .where(eq(charactersTable.slug, slug))
+    .where(and(eq(charactersTable.network, currentNetwork()), eq(charactersTable.slug, slug)))
     .limit(1);
   const row = rows[0];
   if (!row) throw new Error(`Character "${slug}" not found`);
@@ -63,7 +60,7 @@ export async function regeneratePortraitForCharacter(
   const rows = await db
     .select()
     .from(charactersTable)
-    .where(eq(charactersTable.slug, slug))
+    .where(and(eq(charactersTable.network, currentNetwork()), eq(charactersTable.slug, slug)))
     .limit(1);
   const row = rows[0];
   if (!row) throw new Error(`Character "${slug}" not found`);
@@ -87,7 +84,7 @@ export async function setCharacterStatus(
   await db
     .update(charactersTable)
     .set({ status })
-    .where(eq(charactersTable.slug, slug));
+    .where(and(eq(charactersTable.network, currentNetwork()), eq(charactersTable.slug, slug)));
 }
 
 export async function listOpenModerationTickets(db: Db) {
