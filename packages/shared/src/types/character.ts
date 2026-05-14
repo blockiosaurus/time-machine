@@ -10,9 +10,9 @@ export interface CharacterRow {
   birthYear: number | null;
   deathYear: number | null;
   systemPrompt: string;
-  promptIpfsCid: string;
-  portraitIpfsCid: string;
-  registrationIpfsCid: string;
+  promptIpfsCid: string | null;
+  portraitIpfsCid: string | null;
+  registrationIpfsCid: string | null;
   nftMint: string;
   agentRegistryId: string;
   genesisTokenMint: string;

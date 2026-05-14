@@ -1,18 +1,22 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { and, desc, eq } from 'drizzle-orm';
+import { getConfig } from '@metaplex-agent/shared';
 import type { Db } from '../db/index.js';
 import { characters } from '../db/schema.js';
 import { currentNetwork } from '../services/network.js';
 import { sendJson, sendError } from './http-utils.js';
 
 function rowToPublic(row: typeof characters.$inferSelect) {
+  const apiBase = getConfig().PUBLIC_API_URL.replace(/\/$/, '');
   return {
     slug: row.slug,
     canonicalName: row.canonicalName,
     bioSummary: row.bioSummary,
     birthYear: row.birthYear,
     deathYear: row.deathYear,
-    portraitUri: `https://gateway.irys.xyz/${row.portraitIpfsCid}`,
+    // Portrait is served from our server — no Irys dependency, no
+    // network-specific gateway routing needed.
+    portraitUri: `${apiBase}/api/characters/${row.slug}/portrait`,
     nftMint: row.nftMint,
     genesisTokenMint: row.genesisTokenMint,
     genesisTicker: row.genesisTicker,

@@ -190,6 +190,14 @@ const envSchema = z.object({
    */
   PUBLIC_BASE_URL: z.string().url().default('http://localhost:3001'),
 
+  /**
+   * Public base URL of the Time Machine **server** deployment (not the UI).
+   * Used to construct on-chain URIs for portraits, NFT metadata, and the
+   * Agent Registry registration doc — all of which are served from this
+   * server rather than pinned to Irys. Must be publicly reachable.
+   */
+  PUBLIC_API_URL: z.string().url().default('http://localhost:3002'),
+
   /** Comma-separated base58 wallet addresses authorized for /admin. */
   ADMIN_WALLETS: z
     .string()

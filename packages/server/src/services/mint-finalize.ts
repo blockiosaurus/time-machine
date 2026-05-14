@@ -12,8 +12,6 @@ import { transferSol } from '@metaplex-foundation/mpl-toolbox';
 import { fetchAssetV1 } from '@metaplex-foundation/mpl-core';
 import bs58 from 'bs58';
 import {
-  buildAgentRegistrationDoc,
-  buildCharacterMetadataDoc,
   buildCreateCharacterAssetTx,
   buildRegisterIdentityTx,
   buildCreateLaunchInput,
@@ -22,11 +20,15 @@ import {
   getConfig,
   createUmi,
 } from '@metaplex-agent/shared';
-import { META_PROMPT_VERSION } from '@metaplex-agent/core';
 import type { Db } from '../db/index.js';
 import { characters, mintJobs } from '../db/schema.js';
 import { slugify } from './normalize.js';
-import { pinJson, pinBytes } from './irys.js';
+// Genesis API rejects `launch.image` URLs that aren't HTTPS + a real
+// FQDN — localhost URLs fail validation. We pin the portrait to Irys
+// (one upload per mint) just for the Genesis image field; everything
+// else (NFT metadata, registration doc, UI display) still served by
+// this server.
+import { pinBytes } from './irys.js';
 import { currentNetwork } from './network.js';
 
 interface PreviewState {
@@ -45,8 +47,12 @@ interface PreviewState {
 
 interface UploadedArtefacts {
   promptCid: string;
+  /** Irys CID — used for Genesis `launch.image`. */
   portraitCid: string;
+  /** Irys gateway URL — used for Genesis `launch.image`. */
   portraitUri: string;
+  /** Server-hosted URL — used for UI display, no Irys dependency. */
+  portraitServerUrl: string;
   registrationCid: string;
   characterMetadataCid: string;
   characterMetadataUri: string;
@@ -170,67 +176,31 @@ export interface BuildAssetTxResult {
   artefacts: UploadedArtefacts;
 }
 
-async function uploadArtefacts(
-  db: Db,
-  job: typeof mintJobs.$inferSelect,
-  preview: PreviewState,
-  chatEndpoint: string,
+/**
+ * Resolve URLs + pin the portrait to Irys (Genesis-required for the token
+ * image field). Everything else points at our own server.
+ */
+async function resolveArtefactUrls(
+  slug: string,
+  portraitBytes: Buffer | Uint8Array,
+  contentType: string,
 ): Promise<UploadedArtefacts> {
-  if (!job.portraitBytes) {
-    throw new Error('Mint job has no stored portrait bytes; preview must run first.');
-  }
-  if (!job.promptText) {
-    throw new Error('Mint job has no stored prompt text; preview must run first.');
-  }
-
-  const [portrait, promptIpfs] = await Promise.all([
-    pinBytes(job.portraitBytes, preview.portraitContentType),
-    pinJson({
-      systemPrompt: job.promptText,
-      metaPromptVersion: preview.metaPromptVersion,
-      fingerprint: preview.promptFingerprint,
-      figure: {
-        canonicalName: preview.canonicalName,
-        bioSummary: preview.bioSummary,
-        birthYear: preview.birthYear,
-        deathYear: preview.deathYear,
-        aliases: preview.aliases,
-      },
-    }),
-  ]);
-
-  const registrationDoc = buildAgentRegistrationDoc({
-    canonicalName: preview.canonicalName,
-    bioSummary: preview.bioSummary,
-    portraitUri: portrait.uri,
-    chatEndpoint,
-  });
-  const registration = await pinJson(registrationDoc);
-
-  const characterMetadataDoc = buildCharacterMetadataDoc({
-    canonicalName: preview.canonicalName,
-    slug: preview.slug,
-    bioSummary: preview.bioSummary,
-    portraitUri: portrait.uri,
-    promptCid: promptIpfs.cid,
-    portraitCid: portrait.cid,
-    registrationCid: registration.cid,
-    metaPromptVersion: META_PROMPT_VERSION,
-    promptFingerprint: preview.promptFingerprint,
-    birthYear: preview.birthYear,
-    deathYear: preview.deathYear,
-    ticker: preview.ticker,
-  });
-  const characterMetadata = await pinJson(characterMetadataDoc);
-
+  const base = getConfig().PUBLIC_API_URL.replace(/\/$/, '');
+  const portrait = await pinBytes(portraitBytes, contentType, `${slug}.png`);
   return {
-    promptCid: promptIpfs.cid,
+    promptCid: '',
     portraitCid: portrait.cid,
-    portraitUri: portrait.uri,
-    registrationCid: registration.cid,
-    characterMetadataCid: characterMetadata.cid,
-    characterMetadataUri: characterMetadata.uri,
+    portraitUri: portrait.uri, // Irys gateway URL for Genesis
+    portraitServerUrl: `${base}/api/characters/${slug}/portrait`,
+    registrationCid: '',
+    characterMetadataCid: '',
+    characterMetadataUri: `${base}/api/characters/${slug}/metadata.json`,
   };
+}
+
+function registrationUrlFor(slug: string): string {
+  const base = getConfig().PUBLIC_API_URL.replace(/\/$/, '');
+  return `${base}/api/characters/${slug}/registration.json`;
 }
 
 export async function confirmFeeAndBuildAssetTx(
@@ -258,19 +228,18 @@ export async function confirmFeeAndBuildAssetTx(
     })
     .where(eq(mintJobs.id, args.mintJobId));
 
-  // 2. Upload artefacts to Irys (paid by agent wallet, reimbursed by the
-  //    mint fee that just landed).
+  // 2. Pin the portrait to Irys (Genesis requires HTTPS+FQDN for its
+  //    image URL — localhost can't satisfy this; an Irys gateway URL does).
+  //    Everything else stays on our server.
   const existingSteps = (job.steps as Record<string, unknown>) ?? {};
-  const stepUpdate = {
-    ...existingSteps,
-    irys_pin: { status: 'running', startedAt: new Date().toISOString() },
-  };
-  await db
-    .update(mintJobs)
-    .set({ steps: stepUpdate, updatedAt: new Date() })
-    .where(eq(mintJobs.id, args.mintJobId));
-
-  const artefacts = await uploadArtefacts(db, job, preview, args.chatEndpoint);
+  if (!job.portraitBytes) {
+    throw new Error('Mint job has no stored portrait bytes; preview must run first.');
+  }
+  const artefacts = await resolveArtefactUrls(
+    preview.slug,
+    job.portraitBytes,
+    preview.portraitContentType,
+  );
 
   // 3. Build the create+register tx, user pays.
   const umi = createUmi();
@@ -289,7 +258,7 @@ export async function confirmFeeAndBuildAssetTx(
   const registerBuilder = buildRegisterIdentityTx(umi, {
     asset: assetSigner.publicKey,
     collection: config.COLLECTION_ADDRESS,
-    agentRegistrationUri: `https://gateway.irys.xyz/${artefacts.registrationCid}`,
+    agentRegistrationUri: registrationUrlFor(preview.slug),
     payer: userSigner,
     authority: umi.identity,
   });
@@ -486,9 +455,13 @@ export async function confirmMint(
     birthYear: preview.birthYear ?? null,
     deathYear: preview.deathYear ?? null,
     systemPrompt: preview.systemPrompt ?? '',
-    promptIpfsCid: artefacts.promptCid,
-    portraitIpfsCid: artefacts.portraitCid,
-    registrationIpfsCid: artefacts.registrationCid,
+    // Copy portrait bytes from the mint job so we keep serving them
+    // forever from /api/characters/<slug>/portrait. No Irys needed.
+    portraitBytes: job.portraitBytes ?? null,
+    portraitContentType: preview.portraitContentType ?? 'image/png',
+    promptIpfsCid: '',
+    portraitIpfsCid: '',
+    registrationIpfsCid: '',
     nftMint: assetAddr,
     agentRegistryId: assetAddr,
     genesisTokenMint: genesisInfo.mintAddress,
@@ -501,8 +474,8 @@ export async function confirmMint(
     .update(mintJobs)
     .set({
       status: 'on_chain',
-      // Free up the portrait bytes — it's pinned to Irys now and lives in
-      // the characters row via portraitIpfsCid.
+      // Free up bytes on the mint_jobs row; the character row holds them
+      // for ongoing serving.
       portraitBytes: null,
       updatedAt: new Date(),
     })

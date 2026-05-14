@@ -8,6 +8,7 @@ import { Connection, VersionedTransaction } from '@solana/web3.js';
 import type { CreateLaunchInput } from '@metaplex-foundation/genesis';
 import { TimeMachineHeader } from '@/components/tm-header';
 import { MintProgress, type MintPhaseKind } from '@/components/mint-progress';
+import { useServerConfig, formatSol } from '@/hooks/use-server-config';
 import { api, type PreviewResponse } from '../api-client';
 import { registerLaunchFromWallet } from '../genesis-client';
 
@@ -63,9 +64,14 @@ const isProcessingStep = (k: Step['kind']) =>
 
 export default function MintPage() {
   const wallet = useWallet();
+  const serverConfig = useServerConfig();
   const [rawName, setRawName] = useState('');
   const [ticker, setTicker] = useState('');
   const [step, setStep] = useState<Step>({ kind: 'idle' });
+
+  const mintFeeLabel = serverConfig
+    ? formatSol(serverConfig.mintFeeLamports)
+    : '…';
 
   const reset = () => {
     setRawName('');
@@ -166,9 +172,9 @@ export default function MintPage() {
               Mint a historical figure
             </h2>
             <p className="mt-3 max-w-xl text-zinc-300">
-              0.25 SOL fee. We mint your NFT, register it on the Metaplex
-              Agent Registry, and launch a Genesis token whose creator fees
-              flow to you.
+              {mintFeeLabel} fee. We mint your NFT, register it on the
+              Metaplex Agent Registry, and launch a Genesis token whose
+              creator fees flow to you.
             </p>
           </div>
           {(step.kind !== 'idle' && step.kind !== 'success') && (
@@ -355,7 +361,7 @@ export default function MintPage() {
         {/* PROGRESS */}
         {isProcessingStep(step.kind) && (
           <div className="mt-10 space-y-5">
-            <MintProgress step={step.kind as MintPhaseKind} />
+            <MintProgress step={step.kind as MintPhaseKind} mintFeeLabel={mintFeeLabel} />
             {step.kind === 'success' && (
               <div className="rounded-md border border-tm-gold-400/40 bg-tm-gold-200/5 p-5 animate-tm-fade-in">
                 <p className="tm-headline text-lg text-tm-gold-50">

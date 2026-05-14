@@ -25,11 +25,12 @@ interface Phase {
   detail: (current: MintPhaseKind) => string | null;
 }
 
-const PHASES: Phase[] = [
+function makePhases(mintFeeLabel: string): Phase[] {
+  return [
   {
     id: 'fare',
     title: 'Pay the fare',
-    hint: '0.25 SOL secures your seat in the salon.',
+    hint: `${mintFeeLabel} secures your seat in the salon.`,
     detail: (s) => (s === 'awaiting-fee' ? 'Awaiting your signature in the wallet…' : null),
   },
   {
@@ -64,7 +65,8 @@ const PHASES: Phase[] = [
     hint: 'Your character is ready to converse.',
     detail: (s) => (s === 'confirming' ? 'Confirming the final ledger entries…' : null),
   },
-];
+  ];
+}
 
 const PHASE_FOR_STEP: Record<MintPhaseKind, Phase['id']> = {
   'awaiting-fee': 'fare',
@@ -77,10 +79,10 @@ const PHASE_FOR_STEP: Record<MintPhaseKind, Phase['id']> = {
   success: 'arrival',
 };
 
-function phaseStatus(phase: Phase, current: MintPhaseKind): 'done' | 'active' | 'pending' {
+function phaseStatus(phase: Phase, current: MintPhaseKind, phases: Phase[]): 'done' | 'active' | 'pending' {
   if (current === 'success') return 'done';
   const activeId = PHASE_FOR_STEP[current];
-  const order = PHASES.map((p) => p.id);
+  const order = phases.map((p) => p.id);
   const activeIdx = order.indexOf(activeId);
   const phaseIdx = order.indexOf(phase.id);
   if (phaseIdx < activeIdx) return 'done';
@@ -88,7 +90,14 @@ function phaseStatus(phase: Phase, current: MintPhaseKind): 'done' | 'active' | 
   return 'pending';
 }
 
-export function MintProgress({ step }: { step: MintPhaseKind }) {
+export interface MintProgressProps {
+  step: MintPhaseKind;
+  /** Pre-formatted fee label like "0.25 SOL". Falls back to "the network fee". */
+  mintFeeLabel?: string;
+}
+
+export function MintProgress({ step, mintFeeLabel }: MintProgressProps) {
+  const phases = makePhases(mintFeeLabel ?? 'the network fee');
   const completed = step === 'success';
   return (
     <div className="tm-card relative overflow-hidden rounded-lg p-6">
@@ -104,10 +113,10 @@ export function MintProgress({ step }: { step: MintPhaseKind }) {
       </div>
 
       <ol className="relative">
-        {PHASES.map((phase, i) => {
-          const status = phaseStatus(phase, step);
+        {phases.map((phase, i) => {
+          const status = phaseStatus(phase, step, phases);
           const detail = phase.detail(step);
-          const isLast = i === PHASES.length - 1;
+          const isLast = i === phases.length - 1;
           return (
             <li key={phase.id} className="relative pl-12 pb-7">
               {/* Connector line */}

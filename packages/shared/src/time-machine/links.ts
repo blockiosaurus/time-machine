@@ -29,3 +29,24 @@ export function tokenTradeUrl(network: SolanaNetwork, mint: string): string {
   if (network === 'mainnet') return base;
   return `${base}?network=solana-${network}`;
 }
+
+/**
+ * Build the Irys gateway URL for a given upload CID. Mainnet uploads serve
+ * from `gateway.irys.xyz`; devnet/testnet uploads serve from
+ * `devnet.irys.xyz`. Requesting a devnet CID from the mainnet gateway
+ * returns 404, which is the usual cause of "portraits aren't showing up"
+ * after a devnet mint.
+ */
+export function irysGatewayUrl(network: SolanaNetwork, cid: string): string {
+  const host = network === 'mainnet' ? 'gateway.irys.xyz' : 'devnet.irys.xyz';
+  return `https://${host}/${cid}`;
+}
+
+/**
+ * Returns true if `uri` is a valid Irys gateway URL for the given network.
+ * Used by Genesis token-metadata validation, which is strict about hosts.
+ */
+export function isValidIrysGateway(network: SolanaNetwork, uri: string): boolean {
+  const expectedHost = network === 'mainnet' ? 'gateway.irys.xyz' : 'devnet.irys.xyz';
+  return uri.startsWith(`https://${expectedHost}/`);
+}

@@ -231,8 +231,15 @@ export async function handleMintBuildGenesisTxs(
     const out = await buildGenesisTxs(db, parsed.data);
     sendJson(res, 200, { ok: true, ...out });
   } catch (e) {
-    console.error('[mint/build-genesis-txs] failed:', e);
-    sendError(res, 500, 'BUILD_GENESIS_FAILED', (e as Error).message);
+    const err = e as Error & { responseBody?: unknown; statusCode?: number };
+    console.error('[mint/build-genesis-txs] failed:', err);
+    if (err.responseBody) {
+      console.error(
+        '[mint/build-genesis-txs] Genesis API response body:\n' +
+        JSON.stringify(err.responseBody, null, 2),
+      );
+    }
+    sendError(res, 500, 'BUILD_GENESIS_FAILED', err.message);
   }
 }
 

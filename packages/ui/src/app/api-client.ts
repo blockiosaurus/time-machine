@@ -103,8 +103,17 @@ async function get<T>(path: string): Promise<T> {
   return (await res.json()) as T;
 }
 
+export interface ServerConfig {
+  network: 'mainnet' | 'devnet' | 'testnet';
+  mintFeeLamports: number;
+  mintFeeRecipient: string | null;
+  collectionAddress: string | null;
+  publicBaseUrl: string;
+}
+
 export const api = {
   base: apiBase,
+  getConfig: () => get<ServerConfig>('/api/config'),
   listCharacters: () => get<{ characters: CharacterSummary[] }>('/api/characters'),
   getCharacter: (slug: string) => get<CharacterSummary>(`/api/characters/${slug}`),
 

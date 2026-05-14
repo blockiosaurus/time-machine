@@ -15,9 +15,15 @@ CREATE TABLE IF NOT EXISTS characters (
   birth_year            int,
   death_year            int,
   system_prompt         text NOT NULL,
-  prompt_ipfs_cid       text NOT NULL,
-  portrait_ipfs_cid     text NOT NULL,
-  registration_ipfs_cid text NOT NULL,
+  -- Portrait bytes are served from /api/characters/<slug>/portrait — kept
+  -- in-DB rather than pinned to Irys so the gallery doesn't depend on Irys
+  -- uptime. Same for character metadata / registration JSON, which are
+  -- generated on-demand from the row at request time.
+  portrait_bytes        bytea,
+  portrait_content_type text DEFAULT 'image/png',
+  prompt_ipfs_cid       text NOT NULL DEFAULT '',
+  portrait_ipfs_cid     text NOT NULL DEFAULT '',
+  registration_ipfs_cid text NOT NULL DEFAULT '',
   nft_mint              text NOT NULL,
   agent_registry_id     text NOT NULL,
   genesis_token_mint    text NOT NULL,
@@ -95,7 +101,18 @@ ALTER TABLE mint_jobs ADD COLUMN IF NOT EXISTS portrait_bytes bytea;
 ALTER TABLE mint_jobs ADD COLUMN IF NOT EXISTS prompt_text    text;
 ALTER TABLE mint_jobs ADD COLUMN IF NOT EXISTS fee_signature  text;
 ALTER TABLE mint_jobs ADD COLUMN IF NOT EXISTS network        text NOT NULL DEFAULT 'devnet';
-ALTER TABLE characters ADD COLUMN IF NOT EXISTS network       text NOT NULL DEFAULT 'devnet';
+ALTER TABLE characters ADD COLUMN IF NOT EXISTS network              text NOT NULL DEFAULT 'devnet';
+ALTER TABLE characters ADD COLUMN IF NOT EXISTS portrait_bytes       bytea;
+ALTER TABLE characters ADD COLUMN IF NOT EXISTS portrait_content_type text DEFAULT 'image/png';
+-- The on-chain Irys CID columns were previously NOT NULL; relax so we can
+-- skip Irys entirely. Existing rows already populated these; new rows may
+-- leave them empty.
+ALTER TABLE characters ALTER COLUMN prompt_ipfs_cid       DROP NOT NULL;
+ALTER TABLE characters ALTER COLUMN portrait_ipfs_cid     DROP NOT NULL;
+ALTER TABLE characters ALTER COLUMN registration_ipfs_cid DROP NOT NULL;
+ALTER TABLE characters ALTER COLUMN prompt_ipfs_cid       SET DEFAULT '';
+ALTER TABLE characters ALTER COLUMN portrait_ipfs_cid     SET DEFAULT '';
+ALTER TABLE characters ALTER COLUMN registration_ipfs_cid SET DEFAULT '';
 
 -- Refresh the status CHECK constraint to include the new awaiting_fee /
 -- fee_paid states. CREATE TABLE IF NOT EXISTS leaves the original

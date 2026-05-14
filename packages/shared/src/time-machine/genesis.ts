@@ -26,14 +26,15 @@ export interface LaunchCharacterTokenArgs {
   description?: string;
 }
 
-const IRYS_GATEWAY_PREFIX = 'https://gateway.irys.xyz/';
-
+/**
+ * Genesis docs say the token image must be an Irys gateway URL, but the
+ * SDK doesn't enforce it client-side — and Time Machine serves portraits
+ * from its own server now to avoid the Irys dependency. We pass the URL
+ * through unchanged; if Genesis's API rejects non-Irys URLs server-side,
+ * we'll find out at launch time and can pivot back to pinning one
+ * portrait per launch.
+ */
 function ensureIrysImage(uri: string): string {
-  if (!uri.startsWith(IRYS_GATEWAY_PREFIX)) {
-    throw new Error(
-      `Genesis requires Irys-hosted images. Got: ${uri}. Prefix must be ${IRYS_GATEWAY_PREFIX}`,
-    );
-  }
   return uri;
 }
 
@@ -106,7 +107,18 @@ export async function buildLaunchTransactions(
       const msg = (e as Error).message ?? '';
       const isIndexerLag =
         msg.includes('AssetV1') && msg.includes('was not found');
-      if (!isIndexerLag) throw e;
+      if (!isIndexerLag) {
+        // Log full Genesis API response body for non-retryable failures so
+        // misconfigured image URLs / token metadata aren't swallowed.
+        const responseBody = (e as { responseBody?: unknown }).responseBody;
+        if (responseBody) {
+          console.error(
+            '[genesis] createLaunch rejected by API:',
+            JSON.stringify(responseBody, null, 2),
+          );
+        }
+        throw e;
+      }
       lastErr = e;
       const delay = Math.min(baseDelayMs * 2 ** attempt, 8000);
       console.warn(

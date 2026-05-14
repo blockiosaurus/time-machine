@@ -1,6 +1,11 @@
 import { createGenericFile, type Umi } from '@metaplex-foundation/umi';
 import { irysUploader } from '@metaplex-foundation/umi-uploader-irys';
-import { createUmi, getConfig } from '@metaplex-agent/shared';
+import {
+  createUmi,
+  getConfig,
+  irysGatewayUrl,
+  networkFromRpcUrl,
+} from '@metaplex-agent/shared';
 
 export interface IrysUpload {
   /** Irys tx id (also serves as content identifier). */
@@ -64,12 +69,15 @@ export async function pinBytes(
 }
 
 /**
- * The Umi uploader returns a fully-qualified gateway URL like
- * `https://gateway.irys.xyz/<txid>`. Extract the txid + normalize.
+ * The Umi uploader returns a URI containing the tx id, but its host can
+ * be the bundler node URL (`node1.irys.xyz`) rather than the public read
+ * gateway. Extract the tx id and build the proper gateway URL ourselves
+ * so callers get a URL that actually resolves.
  */
 function uriToUpload(uri: string | undefined): IrysUpload {
   if (!uri) throw new Error('Irys uploader returned no URI');
   const match = /\/([A-Za-z0-9_-]{20,})$/.exec(uri);
   const txId = match?.[1] ?? uri.split('/').pop() ?? '';
-  return { cid: txId, txId, uri };
+  const network = networkFromRpcUrl(getConfig().SOLANA_RPC_URL);
+  return { cid: txId, txId, uri: irysGatewayUrl(network, txId) };
 }
