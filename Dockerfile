@@ -18,8 +18,13 @@
 FROM node:20-slim AS builder
 WORKDIR /app
 
-# Enable pnpm via corepack (shipped with Node 20).
-RUN corepack enable
+# Enable pnpm via corepack (shipped with Node 20). Pin pnpm to a version
+# that runs on Node 20 — newer pnpm (11+) requires Node 22+, so without
+# this pin Railway picks the latest pnpm and the build crashes with
+# `No such built-in module: node:sqlite`. The `packageManager` field in
+# package.json is the canonical source of truth; we also activate it
+# explicitly here so the first `pnpm install` doesn't try to auto-upgrade.
+RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
 
 # Copy workspace manifests first so `pnpm install` is cacheable independently
 # of source changes. We include every package manifest the lockfile knows about
